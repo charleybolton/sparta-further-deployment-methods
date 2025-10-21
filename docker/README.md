@@ -11,7 +11,6 @@
     - [Example: Running a Container](#example-running-a-container)
   - [How Docker Works](#how-docker-works)
   - [Downloading Docker Desktop](#downloading-docker-desktop)
-  - [Downloading Docker Desktop](#downloading-docker-desktop-1)
     - [Installation and Account Setup](#installation-and-account-setup)
   - [Container Basics](#container-basics)
     - [Viewing and Managing Containers in Docker Desktop](#viewing-and-managing-containers-in-docker-desktop)
@@ -124,10 +123,6 @@ It provides a consistent way to package applications and their dependencies into
 
 While containerisation existed before Docker, it was complex to implement manually. Docker made containers accessible to everyone by introducing simple commands, automation, and standardised formats.
 
-**How Docker Relates to Containers:**  
-Containers are the underlying technology. Docker is the ecosystem that makes them easy to use — providing tools, commands, and a standard way to build and manage them.  
-Docker makes containerisation *practical, portable, and efficient*, forming a core part of modern development workflows.
-
 **Docker Workflow Overview**
 1. **Build:** Create an image from a `Dockerfile`, which defines everything needed to run the application.  
 2. **Ship:** Push the image to a registry (e.g. Docker Hub) for distribution.  
@@ -220,8 +215,7 @@ Docker is written in **Go** and uses several core **Linux kernel features** to c
 
 These technologies together make containers lightweight, secure, and fast. Multiple containers can run on the same host machine, each isolated but sharing system resources efficiently.
 
-
-## Downloading Docker Desktop 
+---
 
 ## Downloading Docker Desktop
 
@@ -345,7 +339,7 @@ FROM nginx
 COPY static-html-directory /usr/share/nginx/html
 ```
 
-*Note: the nginx base image used in this Dockerfile is pulled from Docker Hub.* 
+*Note: the Nginx base image used in this Dockerfile is pulled from Docker Hub.* 
 
 - **FROM nginx**  
   Uses the official Nginx image as the starting point, which already includes a fully configured web server and a default “Welcome to nginx!” homepage.
@@ -354,11 +348,11 @@ COPY static-html-directory /usr/share/nginx/html
   Copies all local web files from a folder named `static-html-directory` into Nginx’s default web directory inside the container.  
   If this folder is empty or doesn’t exist, Docker still builds the image successfully — Nginx simply continues to serve its built-in default homepage.
 
-This means the Dockerfile works even without adding any custom files, but if `static-html-directory` contains a custom `index.html` or other assets, they will replace Nginx’s default content when the image is built.
+This Dockerfile still works even without custom files. If `static-html-directory` contains a custom `index.html` or other assets, they’ll replace Nginx’s default content when built.
 
 ---
 
-**Build and run the container**
+**Build and Run the Container**
 
 ```bash
 docker build -t some-content-nginx .  
@@ -374,7 +368,7 @@ docker run --name some-nginx -d -p 8080:80 some-content-nginx
 - **-p 8080:80**  
   Maps port 8080 on the host to port 80 inside the container so the site can be viewed at localhost:8080.
 
-If a container is run directly from the base `nginx` image, it still appears in Docker Desktop, but no new image is created.  
+If a container is run directly from the base Nginx image, it still appears in Docker Desktop, but no new image is created.  
 
 Using a Dockerfile ensures a **reusable, consistent build** that can include custom static content when needed.
 
@@ -506,7 +500,7 @@ docker build -t some-content-nginx .
 docker run --name some-nginx -d -p 8080:80 some-content-nginx  
 ```
 
-This ensures the custom homepage and image are always included whenever the image is rebuilt or shared.
+Using a Dockerfile guarantees the custom homepage and image are always included when the image is rebuilt or shared.
 
 ![Nginx Modified Homepage with Dog Image](../images/nginx-homepage-edit-3.png)
 
@@ -567,7 +561,7 @@ project-folder/
 
 When this directory structure is used with the Dockerfile:
 
-```BASH
+```bash
 FROM nginx  
 COPY static-html-directory /usr/share/nginx/html  
 ```
@@ -635,7 +629,7 @@ To confirm the image was uploaded successfully:
 1. Visit the repository page on Docker Hub.  
 2. Check under the **Tags** tab for the uploaded image tag. 
 
-! [Successful Upload of Image to DockerHub] (../images/successful-upload-of-image-to-dockerhub.png)
+![Successful Upload of Image to DockerHub] (../images/successful-upload-of-image-to-dockerhub.png)
 
 3. Optionally, test by pulling the image back down to the local machine and running it:
 
