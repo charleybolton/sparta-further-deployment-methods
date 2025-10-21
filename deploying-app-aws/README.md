@@ -200,6 +200,20 @@ Check the Nginx access logs or app.log for troubleshooting if not.
 
 ## 7. Common Issues / Things to Be Aware Of
 
+
+![Common Error Return](../images/failed-to-execute-goal-error.png)
+
+*The screenshot above shows a typical Maven console output when the Spring Boot application fails to start.*  
+
+The key message —  
+> **“Failed to execute goal … spring-boot-maven-plugin … Connection refused to host: 127.0.0.1”**  
+
+— usually indicates that the application attempted to start, but **could not connect to the MySQL database**.  
+
+As a result, Spring Boot shuts down immediately, and Maven reports a connection error to the internal MBean server (port 9001).  
+
+This specific output is most closely linked to the **first issue** in the table below — where the **app cannot reach the database** due to an incorrect `bind-address` or unreachable DB host.
+
 | Issue | Likely Cause | Explanation, Checks & Resolution |
 |-------|---------------|----------------------------------|
 | **App exits immediately after running** | The Spring Boot app cannot connect to the database, so it shuts down after startup. | This often occurs if the database is not active or the connection details are incorrect. <br><br>**Check:** <br>- Run `sudo systemctl status mysql` on the DB VM — it should show `active (running)`. <br>- Run `telnet <db-ip> 3306` from the app VM — if connected, MySQL is reachable. <br>- Confirm that the app log (`app.log`) shows a successful connection rather than `Connection refused`. <br><br>**Fix:** Ensure MySQL is running, the `bind-address` is set to `0.0.0.0`, and `DB_HOST` in the app matches the database’s public IP. |
