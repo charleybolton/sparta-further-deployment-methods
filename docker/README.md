@@ -7,6 +7,11 @@
   - [Containers](#containers)
   - [Docker](#docker-1)
     - [Why Use Docker](#why-use-docker)
+    - [Docker Alternatives](#docker-alternatives)
+    - [Docker Success Story: Spotify](#docker-success-story-spotify)
+      - [Challenge](#challenge)
+      - [Solution](#solution)
+      - [Results / Benefits](#results--benefits)
   - [Docker Architecture](#docker-architecture)
     - [Example: Running a Container](#example-running-a-container)
   - [How Docker Works](#how-docker-works)
@@ -15,10 +20,12 @@
   - [Container Basics](#container-basics)
     - [Viewing and Managing Containers in Docker Desktop](#viewing-and-managing-containers-in-docker-desktop)
     - [Understanding Container Images](#understanding-container-images)
+    - [First Pull and Run: hello-world](#first-pull-and-run-hello-world)
     - [Creating a Simple Custom Image](#creating-a-simple-custom-image)
       - [Without a Dockerfile](#without-a-dockerfile)
       - [With a Dockerfile](#with-a-dockerfile)
     - [Removing a Container](#removing-a-container)
+    - [Forcibly Removing a Running Container](#forcibly-removing-a-running-container)
   - [Customising Nginx Containers](#customising-nginx-containers)
     - [1. Manual Edits Inside a Running Container](#1-manual-edits-inside-a-running-container)
     - [2. Using Docker Desktop](#2-using-docker-desktop)
@@ -29,9 +36,21 @@
     - [Preparing a Custom Image](#preparing-a-custom-image)
     - [Creating a Repository on Docker Hub](#creating-a-repository-on-docker-hub)
     - [Logging In via Terminal](#logging-in-via-terminal)
+    - [Creating an Image from a Running Container](#creating-an-image-from-a-running-container)
     - [Tagging the Local Image](#tagging-the-local-image)
     - [Pushing the Image to Docker Hub](#pushing-the-image-to-docker-hub)
     - [Verifying the Upload](#verifying-the-upload)
+  - [Docker Compose](#docker-compose)
+    - [Why Use Docker Compose?](#why-use-docker-compose)
+    - [Common Use Cases](#common-use-cases)
+  - [How to Use Docker Compose](#how-to-use-docker-compose)
+    - [How to Install](#how-to-install)
+    - [The Compose File](#the-compose-file)
+    - [Starting and Stopping an Application](#starting-and-stopping-an-application)
+    - [Managing Individual Services](#managing-individual-services)
+    - [Running One-Time Commands](#running-one-time-commands)
+    - [Running One-Time Commands](#running-one-time-commands-1)
+    - [Viewing Container Information](#viewing-container-information)
 
 ## Monolithic vs. Microservices Architecture
 
@@ -150,6 +169,43 @@ This approach ensures that applications behave identically across development, t
    Teams can share images through Docker Hub or private registries, ensuring consistent builds and predictable deployments.
 
 Docker provides the foundation that makes containerisation standardised, reliable, and easy to implement across all environments.
+
+---
+
+### Docker Alternatives
+
+While Docker remains the industry standard for containerisation, several alternatives offer similar functionality with different levels of integration and support.
+
+- **Podman** – Open-source, daemonless, and rootless by default, offering strong security but lacking Docker’s unified management and desktop tools.  
+- **containerd** – A lightweight container runtime used by both Docker and Kubernetes; efficient but minimal, requiring extra tools for building and registry management.  
+- **LXC/LXD** – System-level containers that emulate full operating systems; suitable for infrastructure use cases but less streamlined for developers.  
+- **DIY OSS Stack** – Combining open-source tools can replicate Docker’s functionality but lacks central administration, integrated registries, and enterprise-grade security or support.
+
+**Key Difference:**  
+
+Docker Business delivers an integrated, enterprise-ready suite (Docker Desktop, Hub, Scout, Build Cloud, Testcontainers) that provides advanced security, policy management, and support out of the box — capabilities that alternatives require additional tools and maintenance to match.
+
+---
+
+### Docker Success Story: Spotify
+
+**Company:** Spotify AB — a global music streaming platform serving hundreds of millions of users monthly.  
+**Technology Focus:** Containers (via Docker) and orchestration (via Kubernetes) within a microservices architecture.
+
+#### Challenge  
+Spotify had already adopted microservices and containerised many services using Docker as early as 2014, running them across a fleet of virtual machines.  
+However, managing and orchestrating thousands of containers became complex and costly when using its in-house tool, Helios.  
+
+#### Solution  
+- Migrated from Helios to Kubernetes while continuing to use Docker for containerisation.  
+- Implemented Docker-based microservices that could be scaled, updated, and deployed more efficiently.  
+- Leveraged Kubernetes to automate container scheduling, load balancing, and scaling across global infrastructure.  
+
+#### Results / Benefits  
+- Deployment times reduced from hours to minutes, significantly improving release speed.  
+- Resource utilisation improved through more efficient scheduling and scaling.  
+- Developer productivity increased as teams could focus on delivering new features rather than managing infrastructure.  
+- The platform now runs over 1,600 production services, each independently containerised, maintaining reliability at massive scale.  
 
 ---
 
@@ -296,6 +352,55 @@ This approach keeps builds lightweight, modular, and focused on the application 
 
 ---
 
+### First Pull and Run: hello-world
+
+The hello-world image provides a simple way to verify that Docker has been installed correctly and is functioning as expected.  
+
+It runs a small container that prints a confirmation message from inside the Docker environment, demonstrating the basic process of pulling, creating, and running containers.
+
+When executed, Docker performs several steps automatically:
+
+1. Checks whether the hello-world image already exists locally.  
+2. If the image is missing, it downloads it from Docker Hub — the central repository for container images.  
+3. Creates a new container from that image.  
+4. Runs the container, which prints a short message confirming successful setup, then exits.
+
+To get help from the docker command:
+
+```bash
+docker --help
+```
+
+To view existing local images: 
+
+```bash
+docker images  
+```
+To download and run the hello-world image:  
+
+```bash
+docker run hello-world  
+```
+
+Example output:
+
+```bash
+$ docker run hello-world
+
+Hello from Docker!
+This message shows that your installation appears to be working correctly.
+```
+
+Running the hello-world image for the first time automatically pulls it from Docker Hub if it does not already exist locally. The command creates a container, displays a confirmation message, and then exits once complete.  
+
+When the image is executed a second time, Docker does not perform another download because the image is already cached locally. The container starts instantly and produces the same output.  
+
+**Behaviour comparison:**  
+- *Image not present:* Docker retrieves the required layers from the registry before starting the container.  
+- *Image present locally:* Docker skips the download process and launches the container immediately using the cached image.
+
+---
+
 ### Creating a Simple Custom Image
 
 A new image can be created in two main ways — **with** or **without** a Dockerfile.
@@ -317,6 +422,16 @@ This command:
 - Runs it in the background (`-d`).  
 - Maps port **8080** on the host machine to port **80** in the container.  
 - Uses **-v** to share a local folder with the container, allowing Nginx to serve files from that directory.
+
+To verify that the nginx container is running: 
+
+```bash
+docker ps  
+```
+
+This command lists all active containers along with their container ID, name, status, exposed ports, and associated image.  
+
+If nginx is running correctly, its status will show as “Up” and the port mapping (for example, 0.0.0.0:80->80/tcp) will confirm that it is exposed on port 80 of the local machine.  
 
 This approach is useful for quick testing or demos. However, any changes made are temporary — removing the container deletes its configuration.  
 
@@ -392,6 +507,34 @@ Alternatively, use Docker Desktop:
 
 ---
 
+### Forcibly Removing a Running Container
+
+Attempting to remove a container while it is still running will return an error message similar to:
+
+```bash
+"Error response from daemon: You cannot remove a running container <container_id>. Stop the container before attempting removal or use the -f flag."
+```
+
+This confirms that Docker prevents the removal of active containers by default as a safeguard against accidental deletion.
+
+To forcibly remove a running container without stopping it first: 
+
+```bash
+docker rm -f <container-name>
+```
+
+Using the -f (force) option stops the container and removes it in a single command.
+
+To confirm that the container has been removed:  
+
+```bash
+docker ps -a  
+```
+
+The container should no longer appear in the list, indicating successful removal.
+
+---
+
 ## Customising Nginx Containers
 
 Nginx containers can be customised in several ways depending on what’s needed.  
@@ -432,6 +575,59 @@ cd /usr/share/nginx/html`
 ```bash
   `cat index.html`
 ```
+
+When running Docker on Windows through Git Bash, the terminal can sometimes struggle to run interactive programs properly because Git Bash does not use a full terminal environment (known as a TTY).  
+
+A **TTY **is simply a text-based interface that lets commands receive input and show output in real time — for example, when opening an interactive shell like /bin/bash or editing a file with nano inside a container.  
+
+Git Bash runs on top of a compatibility layer called MSYS2, which does not fully support the same console features that PowerShell or WSL provide.  
+
+Because of this, some interactive Docker commands may not work as expected unless a tool such as winpty is used to fix the issue.
+ 
+As a result, commands such as:  
+
+```bash
+docker exec -it <container-name> bash  
+```
+
+may produce the error message:  
+
+```bash
+"the input device is not a TTY"
+```
+
+**winpty** is a lightweight Windows utility that emulates a proper TTY environment so that interactive commands function correctly.  
+
+Creating an alias ensures Docker commands automatically use winpty when launched from Git Bash, removing the need to type it manually each time:  
+
+```bash
+alias docker="winpty docker"
+```
+
+PowerShell and WSL do not require this workaround because both already provide native TTY support.
+
+The command to update and upgrade packages within a running container is:  
+
+```bash
+apt-get update && apt-get upgrade -y  
+```
+
+If the sudo command is not recognised, it can be installed with:  
+
+```bash
+apt-get install sudo  
+```
+
+Some lightweight base images, such as nginx, do not include nano or sudo by default. To edit files within the container, the nano text editor may need to be installed.
+
+```bash
+apt-get install nano  
+``` 
+
+In certain cases, file edits can still be performed using pre-installed tools such as vi, vim, or by using stream editors like sed without installing nano.  
+
+The nano installation step simply ensures a text editor is available if preferred.
+
 
 - Edit the HTML file inside the container:
   ```bash  
@@ -518,6 +714,24 @@ Using a Dockerfile guarantees the custom homepage and image are always included 
 
 ![Python HTTP on Port 8082:80](../images/python-http.png)
 
+**Nginx Dreamteam Container**
+
+Attempting to run another container on the same port as the existing nginx container results in an error because port 80 is already in use by the first container. The Docker daemon prevents multiple containers from binding to the same host port.
+
+Example error message:
+
+```bash
+Error response from daemon: driver failed programming external connectivity on endpoint nginx-257 (container_id): Bind for 0.0.0.0:80 failed: port is already allocated
+```
+
+The conflicting container must be removed or stopped before reusing the same port. To avoid this conflict, a different host port can be mapped to the container’s internal port 80.
+
+```bash
+docker run --name nginx-dreamteam -d -p 90:80 daraymonsta/nginx-257:dreamteam
+```
+
+This runs the nginx container using port 90 on the host machine while still connecting to port 80 inside the container. The webpage is then accessible at http://localhost:90 in a web browser, confirming the container is running successfully on a different port.
+
 ## Hosting Custom Images on Docker Hub
 
 Once a custom container image has been created locally, it can be shared publicly or privately through **Docker Hub**. Docker Hub acts as a central registry for storing and distributing container images, similar to how GitHub hosts code repositories. It allows developers and teams to publish, version, and share their containerised applications for others to download and run easily.  
@@ -596,6 +810,22 @@ A confirmation message stating “Login Succeeded” confirms successful authent
 
 ---
 
+### Creating an Image from a Running Container
+
+If a container is already running locally and includes changes made manually (for example, an edited index.html file or added assets), a new image can be created directly from that container without rebuilding from a Dockerfile.  
+
+This is achieved using the commit command: 
+
+```bash
+docker commit <container-name> <new-image-name>  
+```
+
+The command takes a snapshot of the container’s current state and saves it as a new image, preserving all modifications.  
+
+Once created, the image appears in the local list of images and can be tagged and pushed to Docker Hub in the same way as any other image.
+
+---
+
 ### Tagging the Local Image
 
 Before pushing an image to Docker Hub, it must be tagged with the correct repository name and username.  
@@ -639,3 +869,166 @@ docker run -d -p 8080:80 exampleuser/host-custom-static-webpage:latest
 ```
 If the container runs and displays the expected application, the upload was successful.
 
+## Docker Compose
+
+**Docker Compose** is a tool for defining and running multi-container applications with a single YAML configuration file.
+
+
+### Why Use Docker Compose?
+
+Docker Compose simplifies the development, deployment, and management of containerised applications.
+
+**Key Benefits:**
+
+- **Simplified Control:**  
+  Define and manage multiple containers in one YAML file, making orchestration and replication straightforward.  
+
+- **Efficient Collaboration:**  
+  Shareable Compose files ensure consistent environments and smoother collaboration between developers and operations teams.
+
+- **Rapid Development:**  
+  Compose caches configurations and reuses existing containers for unchanged services, allowing quick restarts and updates.  
+
+- **Portability:**  
+  Environment variables in Compose files allow customisation for different users or environments.
+
+---
+
+### Common Use Cases
+
+**1. Development Environments**  
+Compose lets developers spin up isolated environments with all dependencies (databases, queues, APIs, etc.) using a single command:
+
+```bash
+docker compose up
+```
+
+This replaces lengthy “getting started” guides with one configuration file and a few commands.
+
+**2. Automated Testing Environments**  
+In CI/CD pipelines, Compose can create and destroy isolated environments for end-to-end tests.  
+Defining services in a Compose file ensures the same setup every time — ideal for repeatable, automated test runs.
+
+## How to Use Docker Compose
+
+### How to Install 
+
+The easiest and recommended way to get Docker Compose is to install Docker Desktop.
+
+Docker Desktop includes Docker Compose along with Docker Engine and Docker CLI which are Compose prerequisites.
+
+### The Compose File
+
+With Docker Compose, a YAML configuration file — known as the *Compose file* — is used to define an application's services.  
+
+The Compose CLI uses this file to create, configure, and start all defined services together.
+
+By default, the Compose file should be named **compose.yaml** (preferred) or **compose.yml**, and placed in the working directory.
+
+### Starting and Stopping an Application
+
+Once Docker Compose is installed and the configuration file is ready, the following commands are used to manage and control the application lifecycle.
+
+```bash
+docker compose up
+```
+
+Builds, (re)creates, starts, and attaches to all containers defined in the Compose file.  
+
+If any required images are missing, Docker automatically pulls them from the registry or builds them locally.
+
+When the command exits, all containers are stopped and logs are displayed directly in the terminal.  
+
+This mode is useful for development or debugging since it provides real-time output from all running services.
+
+To run containers in the background (detached mode), use the **--detach** flag.  
+
+```bash
+docker compose up --detach
+```
+
+This starts all services as background processes, freeing the terminal while keeping the containers active — ideal for long-running or production-like environments.
+
+```bash
+docker compose stop
+```
+
+The stop command stops all running containers without removing them.  
+They can later be restarted using 
+
+```bash
+docker compose start
+``` 
+
+To completely remove containers, networks, and other resources created by *up*, use 
+
+```bash
+docker compose down
+```
+
+By default, this removes:  
+- Containers for services defined in the Compose file.  
+- Networks created for the application.  
+- The default network, if one is used.
+  
+### Managing Individual Services
+
+Docker Compose doesn’t have to manage everything in the file at once — individual services can be targeted.  
+
+For example:  
+- To start or stop only one service, specify its name after the command (e.g., docker compose up db or docker compose stop web).  
+- Multiple services can be listed together to start or stop a specific subset.  
+
+This allows more granular control during development or troubleshooting without affecting the rest of the stack.
+
+---
+
+### Running One-Time Commands
+
+```bash
+docker compose run web bash  
+```
+
+### Running One-Time Commands
+
+docker compose run web bash  
+
+The **run** command starts a temporary container for a service and runs a single command inside it.  
+
+It’s mainly used for quick tasks such as testing, inspecting files, or performing setup steps.  
+
+In this example, the command opens a bash shell inside the **web** service container.  
+When the command finishes or the shell is closed, the container stops automatically.  
+
+The **--detach** option runs the container in the background and prints its container ID instead of showing the output directly.
+
+
+---
+
+### Viewing Container Information
+
+```bash
+docker compose ps  
+```
+Lists all containers for the current Compose project, showing their status and exposed ports.  
+This helps confirm which services are running and how they are mapped.  
+
+```bash
+docker compose logs  
+```
+
+Displays log output from running containers in real time.  
+
+This shows information such as startup progress, connection attempts, and error messages.  
+
+Logs can be viewed for all services or for a specific one by naming it, for example `docker compose logs web`
+
+This helps monitor what each service is doing and makes it easier to identify issues as they happen.
+
+```bash
+docker compose images  
+```
+
+Lists all images used by the created containers in the project.  
+  
+Helps verify which images are being used and ensures they are up to date.
