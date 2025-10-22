@@ -1,0 +1,39 @@
+# Reverse proxy
+services:
+  nginx:
+    image: nginx:latest
+    container_name: nginx_container
+    ports:
+      - 80:80
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - nodejs
+
+# Node.js service
+  nodejs:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: chrleybolton/sparta-test-app:latest
+    container_name: nodejs
+    restart: unless-stopped
+    env_file: ./.env
+    ports:
+      - "3000:3000"
+    depends_on:
+      - mongodb
+    
+# MongoDB database
+  mongodb:
+    image: mongo:latest
+    container_name: mongodb_container
+    restart: unless-stopped
+    env_file: ./.env
+    ports:
+      - '27017:27017'
+    volumes:
+      - mongo-data:/data/db
+
+volumes:
+  mongo-data:
