@@ -21,15 +21,20 @@
       - [Purpose](#purpose-3)
       - [Breakdown](#breakdown-3)
   - [Stage 3 – Database (MongoDB)](#stage-3--database-mongodb)
-    - [.env File](#env-file)
+    - [docker-compose.yml](#docker-composeyml-2)
       - [Purpose](#purpose-4)
       - [Breakdown](#breakdown-4)
-    - [docker-compose.yml](#docker-composeyml-2)
+    - [.env File](#env-file)
       - [Purpose](#purpose-5)
       - [Breakdown](#breakdown-5)
   - [Stage 4 – Database Seeding](#stage-4--database-seeding)
     - [Purpose](#purpose-6)
-    - [Step-by-Step Seeding Instructions](#step-by-step-seeding-instructions)
+    - [Step-by-Step Seeding Instructions (Manual)](#step-by-step-seeding-instructions-manual)
+    - [Automatic Seeding Methods](#automatic-seeding-methods)
+    - [Updated Dockerfile](#updated-dockerfile)
+    - [Updated docker-compose.yml](#updated-docker-composeyml)
+    - [Why the Common Online Method Does Not Work](#why-the-common-online-method-does-not-work)
+    - [Importance of Using `docker compose down -v`](#importance-of-using-docker-compose-down--v)
 
 ## Overview  
 
@@ -40,11 +45,12 @@ This documentation outlines the process of containerising the Sparta Node.js tes
 ## Stage 1: Containerising the Application 
 
 The Sparta Node.js test app runs on Node v20 and serves three key pages:  
+
 - Homepage (`localhost:3000`)  
 - Blog posts page (`localhost:3000/posts`)  
 - Fibonacci page (`localhost:3000/fibonacci/{index}`)  
 
-The `/posts` route connects to a MongoDB database to display seeded data. Before seeding, this route appears blank with “Cannot GET /posts”, indicating the connection is successful but no data exists yet.
+The `/posts` route connects to a MongoDB database to display seeded data. Before seeding, only the page header is visible, indicating the connection is successful but no data exists yet.
 
 ---
 
@@ -52,7 +58,7 @@ The `/posts` route connects to a MongoDB database to display seeded data. Before
 
 #### Purpose  
 
-The Dockerfile defines how to build a container image for the Node.js app. It specifies the base image, working directory, dependencies, and startup commands.
+The Dockerfile defines how to build a container image for the Node.js app. It specifies the base image, working directory, dependencies and startup commands.
 
 #### Breakdown
 
@@ -83,7 +89,7 @@ CMD ["node", "app.js"]
 
 **COPY app /usr/src/app**  
 - Copies the local `app` folder into the container.  
-- The `app` directory contains the main application files (routes, views, logic).
+- The `app` directory contains the main application files.
 
 **COPY package*.json .**  
 - Copies both `package.json` and `package-lock.json` files.  
@@ -205,35 +211,18 @@ It builds from the local Dockerfile, sets up environment variables, and establis
 #### Breakdown
 
 ```yml
-  nodejs:  
-    build:  
-      context: .  
-      dockerfile: Dockerfile  
-    image: chrleybolton/sparta-test-app:latest  
-    container_name: nodejs  
-    restart: unless-stopped  
-    env_file: ./.env  
-    ports:  
-      - "3000:3000"  
-    depends_on:  
-      - mongodb  
+  nodejs:
+    image: chrleybolton/sparta-test-app:latest
+    container_name: nodejs
+    restart: unless-stopped
+    env_file: ./.env
+    depends_on:
+      - mongodb
 ```
 
 **nodejs:**  
 - Defines a service named `nodejs`, which represents the Sparta Node.js application.  
 - This service will build and run the app inside a container, using the Dockerfile from Stage 1.
-
-**build:**  
-- Contains build instructions used by Docker Compose when no prebuilt image is available.
-
-  - **context: .**  
-    - Specifies the build context directory.  
-    - The dot (`.`) means the current working directory, which contains the Dockerfile and application files.  
-    - Everything inside this directory is available to the Docker build process.
-
-  - **dockerfile: Dockerfile**  
-    - Explicitly states which Dockerfile to use for the build.  
-    - This is useful when multiple Dockerfiles exist or when naming conventions differ.
 
 **image: chrleybolton/sparta-test-app:latest**  
 - Defines the image name and tag that will be created and optionally pushed to Docker Hub.  
@@ -246,17 +235,12 @@ It builds from the local Dockerfile, sets up environment variables, and establis
 **restart: unless-stopped**  
 - Automatically restarts the container if it stops unexpectedly (e.g., crash, reboot).  
 - The container will only remain stopped if manually stopped by the user.
+- Ensures reliable uptime and reduces the need for manual restarts after interruptions.
 
 **env_file: ./.env**  
 - Loads environment variables from the `.env` file in the project root directory.  
 - These variables define connection credentials and hostnames for the MongoDB database.  
 - This method centralises configuration and prevents hardcoding sensitive information inside the yml file.
-
-**ports:**  
-  - **"3000:3000"**  
-    - Maps port 3000 on the host machine to port 3000 inside the container.  
-    - The left side (`3000`) refers to the local host port, and the right side (`3000`) refers to the container’s internal port.  
-    - This allows users to access the application in a browser at `http://localhost:3000`.
 
 **depends_on:**  
   - **mongodb**  
@@ -285,11 +269,11 @@ It also prepares the setup for production-style routing and future load balancin
 ```bash
   nginx:  
     image: nginx:latest  
-    container_name: nginx_container  
+    container_name: nginx  
     ports:  
       - 80:80  
     volumes:  
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf  
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro  
     depends_on:  
       - nodejs  
 ```
@@ -302,7 +286,7 @@ It also prepares the setup for production-style routing and future load balancin
 - Pulls the latest version of the official Nginx image from Docker Hub.  
 - Provides a lightweight, production-grade web server optimised for performance.
 
-**container_name: nginx_container**  
+**container_name: nginx**  
 - Assigns a fixed name to the running Nginx container for easy identification and management.
 
 **ports:**  
@@ -317,6 +301,7 @@ It also prepares the setup for production-style routing and future load balancin
     - The left side (`./nginx.conf`) is the host file path, while the right side (`/etc/nginx/conf.d/default.conf`) is the file location inside the container where Nginx expects its configuration.  
     - This bind mount ensures that any edits made to `nginx.conf` locally are reflected immediately inside the container.  
     - This is a common source of errors if the file path or formatting is incorrect. Always verify that the configuration file exists in the correct relative directory.
+    - `:ro` stands for read only. This prevents anything inside the container (including Nginx itself) from accidentally modifying your local config file.
 
 **depends_on:**  
   - **nodejs**  
@@ -369,6 +354,69 @@ The MongoDB container stores all persistent data for the application.
 
 It runs independently but is networked with the Node.js container through Docker Compose.
 
+---
+
+### docker-compose.yml
+
+#### Purpose
+
+This configuration keeps MongoDB running in its own container, separate from the Node.js app, but still allows them to communicate securely.
+
+Docker Compose automatically connects all containers to the same internal network, allowing Node.js to communicate with MongoDB using its service name instead of an IP address.
+
+Because communication happens within this **private Docker network**, there’s no need to modify MongoDB’s bindIp setting — it already accepts connections from other containers on the same network.
+
+The data is stored in a **volume**, meaning it’s saved on the local system even if the MongoDB container is stopped or recreated — ensuring the data remains intact.
+
+```yml
+  mongodb:  
+    image: mongo:latest  
+    container_name: mongodb  
+    restart: unless-stopped  
+    env_file: ./.env    
+    volumes:  
+      - mongo-data:/data/db  
+
+volumes:  
+  mongo-data:  
+```
+
+#### Breakdown
+
+**mongodb:**  
+- Defines a service for running MongoDB as a separate container.  
+- Acts as the database backend for the Node.js application.
+
+**image: mongo:latest**  
+- Pulls the latest official MongoDB image from Docker Hub.  
+- Provides a fully configured MongoDB instance without requiring manual installation.
+
+**container_name: mongodb**  
+- Assigns a human-readable name to the MongoDB container.  
+- Useful for debugging and for connecting via CLI commands.
+
+**restart: unless-stopped**  
+- Automatically restarts the container if it crashes or if the system reboots.  
+- Keeps the database running reliably during development or testing.
+
+**env_file: ./.env**  
+- Loads database credentials and settings from the `.env` file.  
+- Ensures consistency between the app and database configuration.
+
+**volumes:**  
+  - **mongo-data:/data/db**  
+    - Links a local Docker volume named `mongo-data` to MongoDB’s data folder inside the container (`/data/db`).  
+    - Keeps the database files safe and stored outside the container, so data is not lost if the container is deleted or rebuilt.  
+    - Docker automatically keeps this data separate from the container’s temporary filesystem.
+
+**volumes:**  
+  - **mongo-data:**  
+    - Declares the `mongo-data` volume used above.  
+    - Docker creates and manages it automatically if it doesn’t already exist.  
+    - This setup makes MongoDB’s data persistent across restarts and updates.
+
+---
+
 ### .env File
 
 #### Purpose
@@ -385,6 +433,8 @@ The values can be anything, but they must match the credentials created inside t
 In a local development environment, simple placeholders like root / example are common.
 
 In production, these should be replaced with strong, secret credentials (often stored securely via AWS Secrets Manager or Docker secrets).
+
+In previous EC2-based deployments, environment variables were set directly within the instance (for example, using export commands or defined in PM2 or system service configurations), rather than being stored in a dedicated .env file. This approach provided similar functionality but lacked the automatic configuration management and portability offered by Docker Compose.
 
 
 ```bash
@@ -411,77 +461,9 @@ The .env file should be created in the same directory as the docker-compose.yml 
 
 ---
 
-### docker-compose.yml
-
-#### Purpose
-
-This configuration ensures that MongoDB operates as an isolated, persistent data layer.  
-The Node.js service connects to it using environment variables, while Docker Compose handles container networking automatically.  
-
-Data remains intact through volume persistence, and the `.env` file simplifies secure configuration management.
-
-```yml
-  mongodb:  
-    image: mongo:latest  
-    container_name: mongodb_container  
-    restart: unless-stopped  
-    env_file: ./.env  
-    ports:  
-      - '27017:27017'  
-    volumes:  
-      - mongo-data:/data/db  
-
-volumes:  
-  mongo-data:  
-```
-
-#### Breakdown
-
-**mongodb:**  
-- Defines a service for running MongoDB as a separate container.  
-- Acts as the database backend for the Node.js application.
-
-**image: mongo:latest**  
-- Pulls the latest official MongoDB image from Docker Hub.  
-- Provides a fully configured MongoDB instance without requiring manual installation.
-
-**container_name: mongodb_container**  
-- Assigns a human-readable name to the MongoDB container.  
-- Useful for debugging and for connecting via CLI commands.
-
-**restart: unless-stopped**  
-- Automatically restarts the container if it crashes or if the system reboots.  
-- Keeps the database running reliably during development or testing.
-
-**env_file: ./.env**  
-- Loads database credentials and settings from the `.env` file.  
-- Ensures consistency between the app and database configuration.
-
-**ports:**  
-  - **'27017:27017'**  
-    - Maps port 27017 on the host to the same port inside the container.  
-    - Enables local database management tools (e.g., MongoDB Compass) to connect to the container directly for inspection or manual testing.
-
-**volumes:**  
-  - **mongo-data:/data/db**  
-    - Creates a persistent named volume called `mongo-data`.  
-    - Mounts it to MongoDB’s default storage directory `/data/db` inside the container.  
-    - This ensures that database data persists even if the container is removed or rebuilt.  
-    - Volumes are managed by Docker and stored outside the container’s ephemeral filesystem.
-
-**volumes:**  
-  - **mongo-data:**  
-    - Declares the named volume used above.  
-    - Docker will automatically create and manage it if it does not already exist.  
-    - Named volumes prevent data loss between container rebuilds.
-
----
-
 ## Stage 4 – Database Seeding
 
 Once the Node.js and MongoDB containers are running, the database must be seeded with initial data.  
-
-The `/posts` route in the Sparta Node app depends on this seed data. Without it, visiting `/posts` displays either a blank page or the message “Cannot GET /posts,” which confirms that the route exists but the database is currently empty.
 
 ---
 
@@ -494,7 +476,7 @@ Seeding ensures that the `/posts` endpoint can return meaningful content and all
 
 ---
 
-### Step-by-Step Seeding Instructions
+### Step-by-Step Seeding Instructions (Manual)
 
 **1. Verify that all containers are running**
 
@@ -505,9 +487,9 @@ Ensure the Node.js and MongoDB containers are active and connected within the sa
 ```
 
 Expected containers:
-- `nginx_container`
+- `nginx`
 - `nodejs`
-- `mongodb_container`
+- `mongodb`
 
 If any container is missing, start them again:
 
@@ -558,10 +540,129 @@ If the seeding was successful, the `/posts` page will now display a list of post
 
 If the seed command fails:
 - Confirm the MongoDB container is running:  
-  `docker ps | grep mongodb_container`
+  `docker ps | grep mongodb`
 - Check the `.env` file for correct database credentials and host name.
 - Confirm the connection string in `DB_HOST` matches the Compose service name (`mongodb`).
 - Restart the containers:  
   `docker compose down` then `docker compose up -d`
 - Retry seeding once services are stable.
 
+---
+
+### Automatic Seeding Methods
+
+Automatic seeding populates the database with initial data as part of the deployment process.  
+
+It removes the need for manual intervention, ensuring that essential data—such as default posts, users, or configuration values—is inserted whenever the application is first launched or redeployed.  
+
+This approach improves consistency across environments, reduces human error, and speeds up setup for testing or development.  
+
+In production environments, automatic seeding can be configured to run conditionally or with safeguards to prevent overwriting existing data.
+
+**Method 1: Automatic Seeding via Node.js Container**
+
+This method runs the seeding process automatically whenever the Node.js container starts. The seed script executes before the application begins, ensuring the database is always initialised with data.
+
+### Updated Dockerfile
+
+```yaml
+CMD ["node", "app.js"]
+```
+
+is changed to 
+
+```yaml
+CMD ["bash", "-c", "node seeds/seed.js && node app.js"]  
+```
+
+**Explanation**
+
+- `bash -c` runs multiple commands in sequence.  
+- `node seeds/seed.js` populates MongoDB before the app launches.  
+- `&&` ensures `node app.js` runs only after successful seeding.  
+
+Note: This method cannot use the presaved Dockerfile image on Dockerhub in earlier steps so the compose.yml must be updated from
+
+```yaml
+nodejs:
+image: chrleybolton/sparta-test-app:latest
+```
+
+to
+
+```yaml
+  nodejs:
+    build: .
+```
+
+**Explanation**
+
+- `build: .` uses the local Dockerfile so the seeding step runs.  
+- Avoids using a prebuilt image that skips local CMD changes.  
+
+---
+
+**Method 2: Separate Seed Service (Using Existing Image)**
+
+This method creates a dedicated container that runs the seed script automatically when the Docker Compose stack starts.  
+
+It allows the existing prebuilt image from Docker Hub to be reused, avoiding the need to modify the Dockerfile or rebuild the image.
+
+### Updated docker-compose.yml
+
+  seed:
+    image: chrleybolton/sparta-test-app:latest
+    container_name: mongodb_seed
+    env_file: ./.env
+    command: bash -c "node seeds/seed.js"
+    depends_on:
+      - mongodb
+
+**Explanation**
+
+- `image` reuses the prebuilt application image already stored on Docker Hub, meeting the task requirement.  
+- `command` overrides the image’s default start command, running the seed file instead of the main app.   
+- `depends_on` ensures the seed container starts after MongoDB has initialised.  
+- Once the script completes, the seed container exits successfully without restarting.
+
+This method keeps MongoDB and the seeding logic separate, following good container design principles. The Mongo container runs only the database process, while the seed container runs a one-off data initialisation task.
+
+*Note: the node.js service can be changed back to using the originally pushed image.*
+
+---
+
+### Why the Common Online Method Does Not Work
+
+Many online examples suggest mounting a local `seeds` directory into MongoDB using `./seeds:/docker-entrypoint-initdb.d`
+
+This approach relies on MongoDB’s built-in initialisation feature, which automatically executes any `.js` or `.sh` files in `/docker-entrypoint-initdb.d` when the database container is created for the first time.
+
+However, it does not work in this case for two key reasons:
+
+1. The `seed.js` file is written in Node.js using Mongoose and Faker.  
+   The MongoDB container can only execute native Mongo shell scripts (using `db.posts.insert()` syntax). It cannot interpret Node.js files or use external libraries.
+
+2. These scripts only run the first time the MongoDB volume is created.  
+   If the database volume already exists, MongoDB detects existing data and skips the initialisation scripts entirely. This gives the false impression that the seed ran automatically when in fact the data persisted from a previous run.
+
+---
+
+### Importance of Using `docker compose down -v`
+
+The `-v` flag removes any named volumes created by the Compose stack, including the MongoDB data volume.  
+
+Without removing the volume, the old seeded data remains inside Docker, so the application appears to have seeded successfully even if the seed script did not run.
+
+Running:
+
+```bash
+docker compose down -v
+```
+
+forces Docker to delete the existing volume, ensuring that MongoDB starts with a clean, empty database.  
+
+This guarantees that any automatic seeding process actually executes rather than relying on leftover data.
+
+---
+
+*Other approaches such as using shell entrypoint scripts, Compose init jobs, or automated database migrations using tools like Prisma Migrate or Migrate-Mongoose can also perform automatic seeding. These were reviewed but not implemented within this project scope.*
