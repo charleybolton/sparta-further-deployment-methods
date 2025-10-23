@@ -35,6 +35,7 @@
     - [Updated docker-compose.yml](#updated-docker-composeyml)
     - [Why the Common Online Method Does Not Work](#why-the-common-online-method-does-not-work)
     - [Importance of Using `docker compose down -v`](#importance-of-using-docker-compose-down--v)
+  - [Launching The App on an EC2 Instance](#launching-the-app-on-an-ec2-instance)
 
 ## Overview  
 
@@ -666,3 +667,126 @@ This guarantees that any automatic seeding process actually executes rather than
 ---
 
 *Other approaches such as using shell entrypoint scripts, Compose init jobs, or automated database migrations using tools like Prisma Migrate or Migrate-Mongoose can also perform automatic seeding. These were reviewed but not implemented within this project scope.*
+
+---
+
+## Launching The App on an EC2 Instance
+
+Compared to setting up the application solely on EC2 with user data, which requires two separate EC2 instances for the app and database, Docker Compose manages container isolation and restart logic within a single machine. 
+
+Each service (Node.js, MongoDB, Nginx) runs in its own container, which are isolated like lightweight virtual machines but communicate internally through Docker’s private network.  
+
+Each service has a restart policy set to `unless-stopped`, ensuring that if one crashes, Docker automatically restarts it.  
+
+Volumes maintain MongoDB data persistence, even if containers are stopped or rebuilt.  
+
+This setup provides resilience benefits similar to a multi-EC2 deployment, managed locally by Docker.
+
+**1 - Set up an EC2 instance**
+
+AMI: Ubuntu 22.04 LTS
+Instance type: t3.micro (fine for demo)
+Key pair: create or reuse an existing .pem
+Security Group: SSH (22) from Personal IP & HTTP (80) from anywhere
+
+**2 - SSH into EC2 instance. Once in:**
+
+```bash
+sudo apt update -y
+sudo DEBIAN_FRONTEND=noninteractive apt upgrade -y
+```
+
+**3 - Set up Docker's apt repository.**
+
+Add Docker's official GPG key (key pair to allow access to the repo):
+
+```bash
+sudo apt-get install ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+```
+
+Add the repository to Apt sources:
+
+```bash
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update -y
+```
+
+**4 - Install the Docker packages.**
+
+```bash
+sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin -y
+```
+
+The Docker service starts automatically after installation. To verify that Docker is running, use:
+
+```bash
+ sudo systemctl status docker
+```
+
+Verify that the installation is successful by running the hello-world image:
+
+```bash
+ sudo docker run hello-world
+```
+
+or viewing the versions installed:
+
+```bash
+Docker version 28.5.1, build e180ab8
+Docker Compose version v2.40.2
+```
+
+**5 - Generate a Key Pair**
+
+Generate a new SSH key pair on the EC2 instance: 
+
+```bash
+ssh-keygen -t ed25519 -C "your_email@example.com"
+```
+
+Add the public key (`~/.ssh/id_ed25519.pub`) to the GitHub account under *Settings → SSH and GPG keys*.
+
+Test the connection:
+
+```bash
+`ssh -T git@github.com`
+```
+
+**6 - Clone the app repository**
+
+Clone the project repository using SSH
+
+git clone <repo_url>
+cd <name_of_repo>
+
+**7 - Set up Docker Files**
+
+If starting from a new repository, create the following files:
+
+- `Dockerfile`
+- `docker-compose.yaml`
+- `nginx.conf`
+- `.env`
+
+If these files already exist, continue to the next step.
+
+**8 - Start the Containers**
+
+Start the containers:
+
+```bash
+sudo docker compose up -d
+docker ps
+```
+
+`sudo` is required because the default Ubuntu user does not have Docker group permissions.
+
+The Docker containers should now be running, and the application will be accessible via the **public IP address** of the EC2 instance.  
+
+The `/posts` endpoint should be available once the stack is up.
