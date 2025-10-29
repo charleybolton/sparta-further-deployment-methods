@@ -13,4 +13,4 @@ spec:
         command: ["bash", "-c", "node seeds/seed.js"]
         env:
         - name: DB_HOST
-          value: "mongodb://mongo-svc:27017/sparta"
+          value: "mongodb://mongodb-svc:27017/sparta"

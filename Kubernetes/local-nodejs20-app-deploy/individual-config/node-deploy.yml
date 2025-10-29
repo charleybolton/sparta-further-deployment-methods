@@ -21,4 +21,4 @@ spec:
         - containerPort: 3000
         env:
         - name: DB_HOST
-          value: "mongodb://mongo-svc:27017/sparta"
+          value: "mongodb://mongodb-svc:27017/sparta"

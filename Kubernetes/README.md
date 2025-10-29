@@ -49,6 +49,34 @@
     - [5. seed-job.yml](#5-seed-jobyml)
   - [Environment Variable Configuration](#environment-variable-configuration)
   - [Seed Job Breakdown](#seed-job-breakdown)
+  - [Introduction to Managing Storage in Kubernetes](#introduction-to-managing-storage-in-kubernetes)
+  - [Mongo VP and VPC Configuration](#mongo-vp-and-vpc-configuration)
+    - [Updates to Mongo Deployment](#updates-to-mongo-deployment)
+  - [MongoDB Deploy: Storage Change](#mongodb-deploy-storage-change)
+    - [Memory Allocation](#memory-allocation)
+    - [Sparta App Architecture with PV and PVC](#sparta-app-architecture-with-pv-and-pvc)
+  - [However, for production environments or scenarios where MongoDB replicas and stable pod identities are required, MongoDB should be deployed using a **StatefulSet** instead. StatefulSets provide consistent network identities and ensure that `PersistentVolumeClaims` remain reliably attached to the correct Pod across rescheduling and scaling.](#however-for-production-environments-or-scenarios-where-mongodb-replicas-and-stable-pod-identities-are-required-mongodb-should-be-deployed-using-a-statefulset-instead-statefulsets-provide-consistent-network-identities-and-ensure-that-persistentvolumeclaims-remain-reliably-attached-to-the-correct-pod-across-rescheduling-and-scaling)
+    - [Recommended File Grouping](#recommended-file-grouping)
+    - [Dependency and Apply Order](#dependency-and-apply-order)
+    - [Verifying PersistentVolume and PersistentVolumeClaim](#verifying-persistentvolume-and-persistentvolumeclaim)
+    - [Validating Persistence](#validating-persistence)
+    - [Deleting a PVC (Best Practice)](#deleting-a-pvc-best-practice)
+      - [Deleting the PVC and Handling Finalizers](#deleting-the-pvc-and-handling-finalizers)
+    - [Deleting a PV](#deleting-a-pv)
+    - [Data Persistence](#data-persistence)
+      - [PersistentVolume Reclaim Policy](#persistentvolume-reclaim-policy)
+      - [HostPath Location and Persistence Characteristics](#hostpath-location-and-persistence-characteristics)
+      - [StorageClassName](#storageclassname)
+  - [Autoscaling Workloads](#autoscaling-workloads)
+  - [Autoscaling Workloads](#autoscaling-workloads-1)
+    - [Horizontal Scaling (HPA)](#horizontal-scaling-hpa)
+    - [Vertical Scaling (VPA)](#vertical-scaling-vpa)
+  - [Metrics Server on Docker Desktop](#metrics-server-on-docker-desktop)
+    - [Installation of Metric Server](#installation-of-metric-server)
+    - [Stress Testing On the Node.js Application on Docker Desktop](#stress-testing-on-the-nodejs-application-on-docker-desktop)
+  - [Docker Desktop Alternative](#docker-desktop-alternative)
+    - [Stress Testing On the Node.js Application on Minikube](#stress-testing-on-the-nodejs-application-on-minikube)
+    - [Switching Between Docker Desktop and Minikube Kubernetes Contexts](#switching-between-docker-desktop-and-minikube-kubernetes-contexts)
 
 # Kubernetes Basics
 
@@ -247,7 +275,7 @@ Together, these planes separate management from operation. The control plane pla
 
 Kubernetes objects are persistent entities in the Kubernetes system. Kubernetes uses these entities to represent the state of the cluster. Specifically, they can describe:
 
-- What containerized applications are running (and on which nodes)
+- What containerised applications are running (and on which nodes)
 - The resources available to those applications
 - The policies around how those applications behave, such as restart policies, upgrades, and fault-tolerance
 
@@ -914,3 +942,504 @@ spec:
 
 ---
 
+## Introduction to Managing Storage in Kubernetes
+
+Managing storage is a distinct problem from managing compute instances. Compute instances (such as Nodes in Kubernetes) provide CPU and Memory resources that run containers and applications. Storage, on the other hand, is about retaining data for longer than the lifecycle of a container or Pod. Containers and Pods are temporary and can be restarted, rescheduled, or replaced at any time, so storage must exist separately from them to ensure that data is not lost. The PersistentVolume subsystem provides an API that separates how storage is provided from how it is used. This means applications do not need to understand the underlying storage technology. Instead, Kubernetes introduces two resources to manage this:
+
+- **PersistentVolume (PV):** The actual storage resource available in the cluster.
+- **PersistentVolumeClaim (PVC):** A request for storage made by a user or application.
+
+A PersistentVolume (PV) is a piece of storage in the cluster, provisioned either manually by an administrator or automatically through a StorageClass. It is a cluster-level resource with its own lifecycle, meaning it exists independently from any Pod that uses it. Because Pods are temporary and may be rescheduled or recreated, PVs provide a stable place to store data that must persist. The PV object also holds the details of the underlying storage system (for example, NFS, iSCSI, or cloud storage), so applications do not need to understand how that storage is implemented.
+
+A PersistentVolumeClaim (PVC) is a request for storage made by a user or application. Just as Pods request compute resources (CPU and memory), PVCs request storage size and specific access modes (such as ReadWriteOnce, ReadOnlyMany, or ReadWriteMany). The Kubernetes control plane then finds and binds a suitable PV that matches the claim. This allows applications to use storage without needing to know where it comes from or how it is managed.
+
+StorageClass provides a way for administrators to define different types of storage with varying performance or characteristics. This allows dynamic provisioning, where new PVs are automatically created to satisfy a PVC when needed. StorageClasses enable offering multiple storage options (for example, high-performance SSD vs. cost-efficient network storage) without exposing users to the underlying complexity.
+
+---
+
+## Mongo VP and VPC Configuration
+
+```bash
+apiVersion: v1
+# Uses the core Kubernetes API group for PersistentVolumes
+
+kind: PersistentVolume
+# Declares this resource as a PersistentVolume
+
+metadata:
+  name: mongodb-pv
+  # The name of the PersistentVolume resource, used for referencing and binding
+
+spec:
+  storageClassName: manual
+  # Ensures binding only to PVCs that request the same storageClassName; prevents dynamic provisioning.
+  capacity:
+    storage: 10Gi
+    # The total amount of storage allocated for this volume
+  accessModes:
+    - ReadWriteOnce
+    # Allows one node to mount the volume for read/write operations at a time. This is suitable for mongoDB as allowing multiple nodes to mount and write to the same data directory would lead to index conflicts and corruption, so a one-writer model is required for data integrity.
+
+  persistentVolumeReclaimPolicy: Retain
+    # Ensures that data is not deleted automatically if the claim is released; preserves data intentionally
+  hostPath:
+    path: "/data/mongo"
+    # Stores data inside the Kubernetes node (Docker Desktop VM).  # Persists across Pod restarts, but will be lost if the Docker Desktop Kubernetes VM/cluster is reset.
+    type: DirectoryOrCreate
+    # Ensures the directory is created on the host if it does not already exist, allowing the PV to persist data correctly
+
+---
+apiVersion: v1
+# Uses the core API group again, this time for the PersistentVolumeClaim
+
+kind: PersistentVolumeClaim
+# Declares a request for storage that will bind to a matching PersistentVolume
+
+metadata:
+  name: mongodb-pvc
+  # The name of the PVC referenced by workloads (e.g., the MongoDB Deployment)
+
+spec:
+  accessModes:
+    - ReadWriteOnce
+    # Must match the mode of the PersistentVolume to allow binding
+  resources:
+    requests:
+      storage: 10Gi
+      # Requests 10Gi of storage; Kubernetes will bind this claim to a PV of equal or greater capacity
+```
+
+### Updates to Mongo Deployment
+
+## MongoDB Deploy: Storage Change
+
+Originally, the deployment only included a volumeMount:
+
+```bash
+volumeMounts:
+  - name: mongodb-data
+    mountPath: /data/db
+```
+
+In the original configuration, `/data/db` was mounted inside the container without specifying where that data should be stored. This means Kubernetes provided temporary container storage, which is removed when the Pod stops or moves.
+
+The updated configuration keeps the same mount path but links it to a PersistentVolumeClaim. This mount now points to storage allocated on a physical disk managed by the cluster (for example, cloud block storage). This allows the Pod to use a PersistentVolume through the PVC, meaning the data stored in /data/db is retained across Pod restarts, updates, and Node changes. This is required for MongoDB because it stores state that must persist beyond the lifecycle of a single Pod.
+
+```bash
+volumeMounts:
+  - name: mongodb-data
+    mountPath: /data/db
+volumes:
+  - name: mongodb-data
+    persistentVolumeClaim:
+      claimName: mongodb-pvc
+```
+
+---
+
+### Memory Allocation
+
+PersistentVolumes are allocated with a fixed capacity. Allocating significantly more storage than necessary leads to wasted disk space or unnecessary cloud cost. Allocating too little risks database errors when the volume reaches capacity. Selecting an appropriate size requires estimating baseline and growth expectations for the stored data.
+
+The Sparta test application and seed data are lightweight, and even with additional testing inserts, logs, and overhead, the database footprint remains well under a few gigabytes. Allocating 10Gi ensures reliable operation without hitting storage limits, but avoids the overprovisioning that would waste local disk space or introduce unnecessary cloud cost later.
+
+---
+
+### Sparta App Architecture with PV and PVC
+
+![Diagram Showing the Kubernetes Architecture for NodeJs Sparta App Set Up W/ PVC and PV](../images/kubernetes-architecture-sparta-app-w-pvc-pv.png)
+
+| Component | Purpose | How it Connects in the Deployment |
+|----------|---------|-----------------------------------|
+| Pod (MongoDB) | Runs the MongoDB database process. Needs data to stay available even if the Pod restarts. | Uses the PVC to access storage so the database files are stored outside the container. |
+| PersistentVolumeClaim (PVC) | A request for storage, stating how much space is needed and how it should be accessed. | Links the Pod to a PersistentVolume that can provide the required storage. |
+| PersistentVolume (PV) | The actual storage space made available to fulfil the PVC request. | Provides the real disk space that the Pod uses for MongoDB data. |
+| StorageClass | Defines how new PersistentVolumes should be created (for example, using local disk or a cloud volume). | Automatically creates a PersistentVolume when a PVC is made. |
+| Disk (Underlying Storage) | The physical or virtual storage location where data is saved. | Serves as the backing storage that the PV uses to hold MongoDB data. |
+
+> **Note on MongoDB Deployment:**  
+In this setup, MongoDB is deployed using a standard `Deployment`, which is perfectly suitable for local development on Docker Desktop—especially since only a single MongoDB replica is being used. The Pod stores its data via a `PersistentVolumeClaim`, ensuring the database files persist even if the container restarts. 
+
+However, for production environments or scenarios where MongoDB replicas and stable pod identities are required, MongoDB should be deployed using a **StatefulSet** instead. StatefulSets provide consistent network identities and ensure that `PersistentVolumeClaims` remain reliably attached to the correct Pod across rescheduling and scaling.
+---
+
+### Recommended File Grouping
+
+```bash
+mongo-storage.yaml    (PersistentVolume + PersistentVolumeClaim)  
+mongo-config.yaml     (MongoDB Deployment + MongoDB Service)  
+seed-job.yaml         (Database seeding Job)  
+app-config.yaml       (Application Deployment + Application Service)
+```
+
+Structuring files this way keeps logically related resources together and simplifies troubleshooting, updating, and reviewing the configuration.
+
+A seed job is kept separate so it only runs once to populate the database, avoiding accidental re-runs during database restarts or application redeployments that could duplicate or overwrite data.
+
+---
+
+### Dependency and Apply Order
+
+The order in which these resources are applied is important:
+
+1. The PersistentVolume and PersistentVolumeClaim must be present before the MongoDB Deployment starts.  
+   The MongoDB Pod mounts the PVC at startup. If the PVC does not exist, the Pod cannot mount the storage and will stall in a pending state.
+
+2. MongoDB must be running before the seed job executes.  
+   The seed job connects to MongoDB to insert data. If MongoDB is not ready, the job will fail.
+
+3. The application may start at any point after MongoDB is available.  
+   However, starting the application before MongoDB is ready may result in startup failures unless retries are implemented.
+
+Apply order:
+
+```bash
+kubectl apply -f mongo-storage.yaml  
+kubectl apply -f mongo-config.yaml  
+kubectl apply -f seed-job.yaml        (only after confirming MongoDB is Ready)  
+kubectl apply -f app-config.yaml
+```
+
+---
+
+### Verifying PersistentVolume and PersistentVolumeClaim
+
+To verify successful binding, check the state of PersistentVolumes:
+
+```bash
+kubectl get pv
+```
+
+Example key output values indicating success:
+
+```bash
+NAME            CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS
+mongodb-pv      10Gi       RWO            Retain           Available
+pvc-xxxxx       10Gi       RWO            Delete           Bound
+```
+
+Then check the PersistentVolumeClaims:
+
+```bash
+kubectl get pvc
+```
+
+Example key output values indicating success:
+
+```bash
+NAME          STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS
+mongodb-pvc   Bound    pvc-xxxxx                                  10Gi       RWO            hostpath
+```
+
+A correct configuration shows the PVC in a **Bound state**, referencing the expected PV, confirming that the storage is successfully provisioned and ready for MongoDB to use.
+
+---
+
+### Validating Persistence
+
+To confirm persistent storage is functioning as intended:
+
+1. Delete the MongoDB Pod or Deployment.
+2. Allow Kubernetes to recreate it.
+3. Access the application and confirm that existing data is still present in the **same order**.
+
+This validates that data is stored on the PersistentVolume and not lost when Pods are replaced. The new Pod mounts the same PVC and resumes using the same data directory, demonstrating that persistence is correctly configured.
+
+---
+
+### Deleting a PVC (Best Practice)
+
+Before deleting a PVC, the workload using it must be removed or scaled down. This prevents the volume from being actively mounted and avoids the PVC becoming stuck in a Terminating state.
+
+To delete a PVC cleanly:
+1) Ensure no Pod is using it (and delete if they are)
+2) Delete it:
+
+```bash
+kubectl delete pvc <name>
+```
+
+#### Deleting the PVC and Handling Finalizers
+
+Finalizers can be added on a PersistentVolume to ensure that PersistentVolumes having Delete reclaim policy are deleted only after the backing storage are deleted.
+
+If the deletion hangs, press Ctrl + C to stop waiting (the delete request has already been submitted).  
+
+If a PVC is still in Terminating, attempting to re-apply the same PVC manifest will result in a warning:
+
+```bash
+Warning: Detected changes to resource mongodb-pvc which is currently being deleted. persistentvolumeclaim/<name of pvc> unchanged
+```
+
+Inspect the PVC to confirm:
+
+```bash
+kubectl get pvc <name> -o yaml
+# -o yaml displays full object configuration, including any finalizers
+```
+
+If a finalizer is present, remove it:
+
+```bash
+kubectl patch pvc <name> -p '{"metadata":{"finalizers":[]}}'
+# -p updates the metadata and clears the finalizers list so deletion can complete
+```
+
+Finalizers exist to prevent accidental data loss; only remove them once the PVC is confirmed unused.
+
+---
+
+### Deleting a PV
+
+Remove a PV using:
+
+```bash
+kubectl delete pv <pv-name>
+```
+
+---
+
+### Data Persistence
+
+#### PersistentVolume Reclaim Policy
+
+The `persistentVolumeReclaimPolicy` governs the fate of the *underlying storage* when a bound PersistentVolumeClaim (PVC) is deleted.  
+
+With `persistentVolumeReclaimPolicy: Retain`, the PersistentVolume (PV) is neither cleared nor removed when the PVC is deleted. The data remains at the physical storage location configured on the PV. This prevents accidental loss of application state and is appropriate for stateful workloads such as MongoDB, where data loss can cause corruption or require reseeding.
+
+#### HostPath Location and Persistence Characteristics
+
+- `hostPath: /data/mongo`  
+  This directory is created inside the internal Kubernetes node filesystem used by Docker Desktop.  
+
+  Data stored here continues to exist through Pod restarts and PVC/PV recreation.  
+
+  However, if the Docker Desktop Kubernetes cluster or node is reset or recreated, this internal filesystem may be rebuilt and the stored data will be lost.  
+
+  This location is suitable for temporary development where persistence only needs to last during the current cluster session.
+
+Alternatively, the `hostPath` may reference a directory on the host machine’s filesystem rather than the Kubernetes node environment, e.g. `hostPath: /Users/.../mongo-data`, allowing the stored data to persist independently of the cluster lifecycle.
+
+#### StorageClassName
+
+The `storageClassName` field ensures that a PersistentVolumeClaim is bound to the correct PersistentVolume. In environments such as Docker Desktop or Minikube, where dynamic provisioning (*a Kubernetes feature that automatically creates storage resources when a PersistentVolumeClaim is made*) may not be available, specifying `storageClassName: manual` prevents Kubernetes from attempting to create storage automatically. 
+
+This requires the PVC to match a PV that has the same `storageClassName`, ensuring a predictable and intentional binding. 
+
+Without this value, a PVC may remain in a Pending state because Kubernetes cannot determine which PV to use, even when sizes and access modes match. By declaring the storage class explicitly, the configuration avoids unintended provisioning, removes ambiguity where multiple PVs are present, and ensures the PV defined for the workload is the one that is actually used.
+
+
+---
+
+## Autoscaling Workloads
+
+Autoscaling allows workloads in a Kubernetes cluster to adjust automatically in response to changing resource demands. This provides elasticity and efficient resource usage without requiring manual intervention.
+
+When scaling a workload, the cluster can:
+
+- Increase or decrease the number of replicas running (horizontal scaling)
+- Adjust CPU and memory resources assigned to Pods (vertical scaling)
+
+## Autoscaling Workloads
+
+Autoscaling enables Kubernetes workloads to adjust automatically based on resource demand, improving efficiency and performance without manual scaling.
+
+There are two main approaches to autoscaling:
+
+- **Horizontal Scaling** – Increasing or decreasing the number of Pod replicas.
+- **Vertical Scaling** – Adjusting CPU and memory resources assigned to containers.
+
+---
+
+### Horizontal Scaling (HPA)
+
+Horizontal scaling is the primary autoscaling method in Kubernetes and is managed through the **HorizontalPodAutoscaler (HPA)**.
+
+The HPA is a Kubernetes API resource and controller that monitors metrics such as CPU or memory utilisation and automatically adjusts the number of replicas in a Deployment to maintain a target utilisation level.
+
+This allows applications to handle traffic spikes and reduce resource usage during quieter periods.
+
+---
+
+### Vertical Scaling (VPA)
+
+Vertical scaling involves modifying the CPU and memory requests/limits assigned to Pods. This is handled by the **VerticalPodAutoscaler (VPA)**, which is installed as an add-on rather than included by default.
+
+The VPA monitors actual resource usage and suggests or applies changes to container resource requests. Updating these values often requires restarting Pods, so vertical scaling is typically used in environments where workloads are predictable or when horizontal scaling alone is not sufficient.
+
+Vertical scaling supports modes that control how recommendations are applied, including assigning resources only at pod creation or adjusting resources by recreating Pods when needed.
+
+---
+
+## Metrics Server on Docker Desktop
+
+Metrics Server is required to enable horizontal pod autoscaling because the HorizontalPodAutoscaler relies on live CPU and memory usage data to determine when to scale a workload up or down. Kubernetes does not collect or expose these resource metrics by default; Metrics Server provides them by aggregating usage data from each node’s Kubelet and publishing it through the Resource Metrics API. Without Metrics Server, the HPA controller has no utilisation metrics to evaluate and therefore cannot adjust replica counts, meaning autoscaling based on workload demand will not function.
+
+### Installation of Metric Server
+
+1. To install the latest Metrics Server release from the components.yaml manifest, run the following command.
+
+```bash
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+```
+
+2. Patch deployment to allow insecure kubelet TLS  
+
+```bash
+kubectl patch deployment metrics-server -n kube-system \
+  --type='json' \
+  -p='[{"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--kubelet-insecure-tls"}]'
+```
+
+Horizontal Pod Autoscaling relies on the Metrics Server to supply current CPU and memory usage for each Pod. To gather this information, the Metrics Server contacts the kubelet running on each node. This communication is protected using TLS, which requires the Metrics Server to verify the kubelet’s certificate to confirm it is connecting to a trusted source. 
+
+In Docker Desktop, the kubelet uses a self-signed certificate that is not issued by a recognised certificate authority. Because it cannot be validated, the Metrics Server treats the connection as unsafe and refuses it. As a result, no resource metrics are collected, the Metrics API has no values to report, and the HorizontalPodAutoscaler has no data to evaluate when deciding whether to scale Pods.
+
+Adding the `--kubelet-insecure-tls argument` to the Metrics Server container instructs it to skip TLS certificate verification when contacting the kubelet. This allows metrics to be collected successfully in a local development environment where certificate trust is not configured, enabling horizontal autoscaling to function. 
+
+This modification should only be used for local testing and not in production environments where certificate validation is required for secure communication.
+
+1. Delete the existing Metrics Server Pod so the Deployment creates a replacement Pod with the updated configuration.
+
+```bash
+kubectl delete pod -n kube-system -l k8s-app=metrics-server
+```
+
+1. Validate that metrics are available  
+
+```bash
+kubectl top nodes
+kubectl top pods
+```
+
+- kubectl top nodes displays current CPU and memory usage for each node in the cluster, sourced from the Metrics Server.
+- kubectl top pods displays current CPU and memory usage for each Pod, allowing observation of workload utilisation and autoscaling behaviour.
+
+Expected output:
+
+```bash
+NAME         CPU(cores)   CPU%   MEMORY(bytes)   MEMORY%
+docker-desktop   120m       3%     950Mi          18%
+
+NAME                      CPU(cores)   MEMORY(bytes)
+nodejs-deployment-abc123   15m          120Mi
+nodejs-deployment-def456   18m          125Mi
+```
+
+Failed output:
+
+```bash
+error: Metrics API not available
+```
+
+This indicates that the Metrics Server has not yet begun returning resource data. Allow some time for metrics collection and aggregation to start before rechecking.
+
+Troubleshooting:
+
+Troubleshooting:
+
+| Action | What it Checks | Expected Output | Problem Indicators | Next Step / Fix |
+|--------|----------------|----------------|-------------------|-----------------|
+| `kubectl get pods -n kube-system \| grep metrics-server` | Confirms that the Metrics Server Pod is running | Pod listed in `Running` state (for example, `1/1 Running`) | Pod not present, `Pending`, `CrashLoopBackOff`, `ImagePullBackOff` | Check logs for cause, verify container arguments, or restart the Pod |
+| `kubectl logs -n kube-system deployment/metrics-server` | Shows why Metrics Server cannot collect metrics | Logs show normal scrape activity without repeated warnings | Errors such as `x509: certificate signed by unknown authority` or `unable to fetch metrics from kubelet` | Ensure `--kubelet-insecure-tls` argument is added and Pod restarted |
+| `kubectl get deployment metrics-server -n kube-system -o yaml > metrics-server.yaml` | Confirms the deployment contains the insecure TLS argument | Under `spec.template.spec.containers.args`, `--kubelet-insecure-tls` is listed | Argument missing or not applied | Add the argument, re-apply the YAML file, then restart the Pod |
+| `kubectl get --raw "/apis/metrics.k8s.io/"` | Checks if the Metrics API endpoint is responding | Returns JSON output describing API resources | Returns `service unavailable` or connection errors | Wait for metrics to propagate (30–90 seconds), then recheck logs |
+| `kubectl delete pod -n kube-system <metrics-server-pod-name>` | Forces creation of a new Metrics Server Pod using updated configuration | New Pod created and transitions to `Running` | Pod repeatedly restarts or fails readiness probes | Inspect logs and kubelet connectivity issues before retrying |
+
+---
+
+### Stress Testing On the Node.js Application on Docker Desktop
+
+1. Access the Application and note the NodePort (for example, 30002),
+
+Check the Service:
+
+```bash
+kubectl get svc nodejs-svc
+```
+
+2. Generate Load Against the Application
+   
+```bash
+`ab -n 20000 -c 50 http://localhost:<nodePort>/`
+```
+This uses Apache Bench to send 20,000 HTTP requests with a concurrency level of 50. The sustained load increases CPU usage on the Node.js Pods. If Horizontal Pod Autoscaling is enabled, this increased utilisation should trigger a scale-out event.
+
+3. Observe Autoscaling Behaviour 
+   
+```bash
+kubectl get hpa -w
+```
+Watches the HorizontalPodAutoscaler resource in real-time. This shows the current CPU usage compared to the configured target and displays when the HPA increases or decreases the number of replicas.
+
+During increasing load, expect the CPU usage value to rise above the target threshold. The HPA will detect this and increase the desired number of replicas. The `DESIRED` count will step up gradually (for example, from 3 → 4 → 5) as the system works to bring CPU usage back toward the target.
+
+```bash
+kubectl get pods -w
+```
+
+Watches the Pod lifecycle. As the HPA scales the Deployment, new Pods are created when load increases and removed when load reduces. This command provides live visibility of scaling actions taking effect.
+
+As the HPA requests more replicas, new Pods will appear. They will progress from `ContainerCreating` to `Running` as they start handling traffic. The list will expand with additional Pod names while the scale-out event is occurring.
+
+---
+
+## Docker Desktop Alternative
+
+Minikube configures Metrics Server and kubelets with compatible certificate and networking defaults. No TLS bypassing or runtime patching is required for autoscaling.
+
+To run a local Kubernetes cluster with built-in resource metrics support, install Minikube, start the cluster, enable the Metrics Server addon, and then query live usage metrics:
+
+```bash
+brew install minikube
+minikube start
+minikube addons enable metrics-server
+kubectl top nodes
+```
+
+Example expected output:
+
+```bash
+NAME       CPU(cores)   CPU(%)   MEMORY(bytes)   MEMORY(%)
+minikube   195m         1%       625Mi           7%
+```
+
+---
+
+### Stress Testing On the Node.js Application on Minikube
+
+1. Port-forward the Service
+
+```bash  
+kubectl port-forward svc/nodejs-svc 3000:3000
+```
+
+Using `kubectl port-forward` bypasses the Service’s NodePort and connects directly to the Service inside the cluster. This avoids relying on the NodePort range (30000–32767) and does not depend on how the local Kubernetes environment exposes networking.
+
+In Docker Desktop Kubernetes, NodePort and ClusterIP Services are reachable on `localhost` because Docker Desktop maps the cluster network to the host machine.
+
+In Minikube, Services run inside a Minikube-managed VM or container runtime environment. The VM network is separate from the host, so NodePort addresses do not automatically map to `localhost`. As a result, the application is not reachable externally unless a forwarding mechanism is used.
+
+2. Generate Load Against the Application
+   
+```bash
+`ab -n 20000 -c 50 http://localhost:3000/`
+```
+
+3. Observe Autoscaling Behaviour (same as Docker Desktop)
+
+![Horizontal Pod Autoscaling CPU Stress Test on Minikube](../images/stress-test-minikube.gif)
+
+4. Once finished testing, to keep Minikube installed but no cluster running
+
+```bash
+minikube stop
+```
+
+### Switching Between Docker Desktop and Minikube Kubernetes Contexts
+
+`kubectl config get-contexts` - Lists all available Kubernetes contexts on the machine. Each context represents a cluster configuration, user identity, and namespace selection. This command is used to see which clusters are available and which one is currently active.
+
+`kubectl config use-context minikube` - Switches the active Kubernetes context to Minikube. This directs all subsequent `kubectl` commands to the Minikube cluster.
+
+`kubectl config use-context docker-desktop` - Switches the active Kubernetes context back to the Docker Desktop Kubernetes cluster. This returns control to the Docker Desktop environment for running commands and managing resources.

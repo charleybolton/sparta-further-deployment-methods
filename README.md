@@ -1,73 +1,87 @@
-A work in progress... 
-Day 2
+A work in progress...
 
 
-Task: Create 2-tier deployment with PV for database
-
-Pre-requisite: You have the NodeJS app and MongoDB database working on Kubernetes, but you are not using a PV (persistent volume) yet for the database.
-
-1. Create your app and database deployment, but for the database include a volume (PV and PVC).
-
-a. Be careful you don't allocate too much storage for the PV
-
-b. Remember to remove PV at the end (otherwise they will just stay there)
-
-c. Check them using these commands:
+Day 3
 
 
-kubectl get pv
+Task: Setup minikube on a cloud instance running Ubuntu 22.04 LTS
 
-kubectl get pvc
+Aim: Get minikube running on a cloud instance
 
+· Use a cloud instance, either
 
-You will know you are successful if you:
+o An AWS EC2 instance (size: t3a.small) or
 
-1. Delete the database deployment or the database pod
+o An Azure VM (size: standard_b2pls)
 
-2. Re-create the database deployment or pod
-
-3. The same data displays on the /posts page.
-
-
-2. Diagram your Kubernetes architecture with the PV and PVC
-
-a. Have logical notes/dot points on your diagram, labels
+· Image: Ubuntu 22.04 LTS
 
 
-Links to help: · https://kubernetes.io/docs/concepts/storage/persistent-volumes/
+Task: Deploy on three apps on one cloud instance running minikube
+
+· Aim: Deploy three apps on minikube that will all run at the same time and be exposed to the outside world at different endpoints
+
+· Rationale:
+
+· Consolidate the skills already learnt
+
+· Develop understanding that will help deployment of Sparta test app (to be done in a later task)
+
+· First app deployment:
+
+o Should use a NodePort service at NodePort 30001
+
+o Use image daraymonsta/nginx-257:dreamteam with container port 80 (or use your own image)
+
+§ App container should have 5 replicas
+
+o Use Nginx web server installed on the same cloud instance and configure reverse proxy to expose the app:
+
+§ App should be accessed from the outside on <instance's public IP address> (default HTTP port)
+
+· Second app deployment:
+
+o Use a LoadBalancer service at port 9000, NodePort of LoadBalancer service 30002
+
+o Use minikube tunnel to emulate a load balancer on the same cloud instance
+
+o Use image daraymonsta/tech201-nginx-auto:v1 with container port 80 (or use your own image)
+
+§ App container should have 2 replicas
+
+o Use Nginx web server installed on the same cloud instance and configure reverse proxy to expose the app:
+
+§ App should be accessed from the outside on <instance's public IP address>:9000
+
+· Third app deployment:
+
+o Deploy hello-minikube as the third app. § Use official documentation to help: https://kubernetes.io/docs/tutorials/hello-minikube/
+
+o Use a LoadBalancer service at port 8080, NodePort of LoadBalancer service does not need to be specified
+
+o Use minikube tunnel to emulate the load balancer on the same cloud instance (use the same tunnel service you already used for the second app's deployment)
+
+o Use Nginx web server installed on the same cloud instance and configure reverse proxy to expose the app:
+
+§ App should be accessed from the outside on <instance's public IP address>/hello
+
+· In your documentation, include:
+
+o Specifics on how and why use minikube tunnel
+
+o How you cleanup and remove each deployment
+
+o How to get Kubernetes working again after restarting the cloud instance
 
 
+Task: Use Kubernetes to deploy the Sparta test app in the cloud
 
-Task: Research types of autoscaling with K8s
+· Deploy containerised 2-tier deployment (app and database) on a single VM using Minikube
 
-· Research and document the types of autoscaling available with K8s
+· Database should use a PV of 100 MB
 
-· Duration: 10-15 min
+· Use HPA to scale the app, min 2, max 10 replicas - load test to check it works
 
+· Use NodePort service and Nginx reverse proxy to expose the app service to port 80 of the instance's public IP
 
-Task: Use Horizontal Pod Autoscaler (HPA) to scale the app
-
-· Scale only the app (minimum 2, maximum 10 replicas)
-
-· Test your scaler works by load testing
-
-o You could use Apache Bench (ab) for load testing
-
-
-(Extension – if time) Task: Remove PVC and retain data in Persistent Volume
-
-Pre-requisite: You have the NodeJS app and MongoDB database working on Kubernetes with PV and PVC for the Mongo database deployment.
-
-
-1. Test out your PV and PVC
-
-a. Delete the PV and PVC
-b. Re-create your PV and PVC and see if your data was retained (same data from the previous PV)
-
-2. If the data has been wiped, work on modifying your PV and PVC to retain the data
-
-
-You may first wish to duplicate your previous work, then work on this task.
-
-
-Links to help: · https://kubernetes.io/docs/tasks/administer-cluster/change-pv-reclaim-policy/ · https://kubernetes.io/docs/concepts/storage/persistent-volumes/
+· Make sure that `minikube start` happens automatically on re-start of the instance
