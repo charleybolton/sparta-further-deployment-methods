@@ -77,6 +77,16 @@
   - [Docker Desktop Alternative](#docker-desktop-alternative)
     - [Stress Testing On the Node.js Application on Minikube](#stress-testing-on-the-nodejs-application-on-minikube)
     - [Switching Between Docker Desktop and Minikube Kubernetes Contexts](#switching-between-docker-desktop-and-minikube-kubernetes-contexts)
+- [Deploying Multiple Applications on Minikube in an EC2 Environment](#deploying-multiple-applications-on-minikube-in-an-ec2-environment)
+  - [EC2 Instance Setup](#ec2-instance-setup)
+  - [Installing Docker](#installing-docker)
+  - [Installing kubectl](#installing-kubectl)
+  - [What is Minikube](#what-is-minikube)
+  - [Installing and Starting Minikube](#installing-and-starting-minikube)
+  - [Installing NGINX on the EC2 Host](#installing-nginx-on-the-ec2-host)
+  - [First Application: NodePort Exposure on Port 30001](#first-application-nodeport-exposure-on-port-30001)
+    - [Reverse Proxy for Application 1](#reverse-proxy-for-application-1)
+    - [Security Group Changed for Application 1:](#security-group-changed-for-application-1)
 
 # Kubernetes Basics
 
@@ -1443,3 +1453,183 @@ minikube stop
 `kubectl config use-context minikube` - Switches the active Kubernetes context to Minikube. This directs all subsequent `kubectl` commands to the Minikube cluster.
 
 `kubectl config use-context docker-desktop` - Switches the active Kubernetes context back to the Docker Desktop Kubernetes cluster. This returns control to the Docker Desktop environment for running commands and managing resources.
+
+---
+
+# Deploying Multiple Applications on Minikube in an EC2 Environment
+
+This section documents the setup and deployment of three applications within a single Minikube cluster running on an Ubuntu EC2 instance. It covers infrastructure setup, Kubernetes deployment methods, traffic routing using NGINX, and methods to regain cluster access after instance restarts. It also outlines the reasoning behind each configuration choice to ensure clarity and reproducibility.
+
+---
+
+## EC2 Instance Setup
+
+A t3a.small EC2 instance running Ubuntu 22.04 LTS provides a suitable environment for Minikube. The instance must allow inbound SSH and HTTP traffic:
+
+- Allow port 22 for administrative SSH access (restricted to trusted IPs).
+- Allow port 80 (HTTP) to serve traffic to applications through NGINX.
+- Additional ports should only be opened when external access is required.
+
+---
+
+## Installing Docker
+
+Docker acts as the container runtime that Minikube uses to run Kubernetes workloads. Installing and enabling Docker ensures containers can be created and managed by the cluster.
+
+```bash
+sudo apt update -y
+sudo DEBIAN_FRONTEND=noninteractive apt upgrade -y
+sudo DEBIAN_FRONTEND=noninteractive apt install docker.io -y
+sudo systemctl start docker
+sudo systemctl enable docker
+```
+
+To confirm successful installation: `docker --version`
+
+---
+
+## Installing kubectl
+
+kubectl provides command-line interaction with Kubernetes. Installing it locally on the EC2 host allows direct cluster administration.
+
+```bash
+sudo snap install kubectl --classic
+```
+
+To confirm successful installation: `kubectl version --client`
+
+---
+
+## What is Minikube
+
+Minikube is a lightweight, single-node Kubernetes cluster used for learning, development, and testing. It provides all the core Kubernetes components on a single machine, so applications can be deployed and managed in the same way they would be in a larger, multi-node production cluster.
+
+On the EC2 instance, Minikube is run using Docker as the driver. This means Kubernetes runs inside Docker containers rather than inside additional virtual machines. Running Kubernetes this way keeps the setup simple, avoids extra system overhead, and works well in environments where only container-level virtualisation is needed.
+
+Unlike Docker Desktop, which only provides Kubernetes when running on a local workstation, Minikube can install and run Kubernetes directly on a cloud instance. Running Minikube with the Docker driver on EC2 avoids the need for Docker Desktop entirely and provides a fully functional Kubernetes environment that works in a server setup where a graphical desktop environment is not available.
+
+## Installing and Starting Minikube
+
+```bash
+curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
+sudo install minikube-linux-amd64 /usr/local/bin/minikube
+```
+
+This downloads the Minikube executable and installs it into the system’s path so it can be run as the `minikube` command.
+
+To confirm successful installation: `minikube version`
+
+**Start Minikube:**
+
+```bash
+minikube start --driver=docker
+
+# If permission errors occur, add the current user to the Docker group and reinitialise the shell:
+
+sudo usermod -aG docker $USER
+newgrp docker
+groups
+
+# Adds the current user to the Docker group so Docker commands can be run without sudo, then reloads group membership in the current shell.
+
+```
+To verify the cluster: `minikube status`
+
+---
+
+## Installing NGINX on the EC2 Host
+
+NGINX is used as a reverse proxy to route external HTTP traffic from the EC2 public IP into Minikube’s internal network. 
+
+Minikube runs workloads inside a private network (for example, 192.168.49.0/24). These internal IP addresses are not reachable from the public internet. NGINX listens on the EC2 instance’s public IP and forwards requests to the appropriate service inside Minikube.
+
+Traffic Flow:
+
+Browser → EC2 Public IP:80 → NGINX → Minikube Internal IP:NodePort → Service → Pod
+
+The Minikube IP is used because NodePort services expose ports to the host network, not the public internet.
+
+```bash
+sudo apt update -y
+sudo DEBIAN_FRONTEND=noninteractive apt install nginx -y
+sudo systemctl restart nginx
+sudo systemctl enable nginx
+```
+
+---
+
+## First Application: NodePort Exposure on Port 30001
+
+The application brief:
+- A Deployment running 5 replicas of the application container  
+- A NodePort Service exposing the application on port 30001  
+
+*Refer to the deployment and service manifests for configuration details.*
+
+| Field          | Where It Applies      | Meaning                                                                 | Determined By                      | Value Used Here |
+|----------------|-----------------------|-------------------------------------------------------------------------|------------------------------------|-----------------|
+| containerPort  | Pod (container spec)  | The port the application inside the container listens on                | The application image itself       | 3000            |
+| port           | Service spec          | The port the Service exposes inside the cluster                         | Chosen when creating the Service   | 80              |
+| targetPort     | Service spec          | The port on the Pod that the Service forwards traffic to                | Must match the containerPort       | 3000            |
+| nodePort       | Service (NodePort)    | The port opened on the Minikube node for external access (host-level)   | Chosen manually (30000–32767)      | 30001           |
+
+
+A NodePort Service makes the application available on a high port (30000–32767) inside the Minikube network. This port is not exposed publicly. Instead, NGINX on the EC2 host forwards external traffic from port 80 to the NodePort inside Minikube.
+
+### Reverse Proxy for Application 1
+
+The NGINX configuration is updated to forward external traffic from the EC2 host into the application running inside Minikube. 
+
+Minikube creates its own internal network and assigns an internal IP address that is not publicly accessible. The application is exposed inside Minikube through a NodePort, but this NodePort can only be reached from within the EC2 host. 
+
+NGINX listens on the EC2 public IP and forwards requests to the Minikube IP and NodePort, allowing external users to access the application through the EC2 public address while keeping the internal Minikube networking isolated.
+
+1. Back up original config (good practice).
+
+```bash
+sudo cp /etc/nginx/sites-available/default /etc/nginx/sites-available/default.bak-$(date +%F-%H%M%S)
+```
+
+2. Find Minikube IP (required to point the reverse proxy correctly).
+
+```bash
+minikube ip
+```
+
+3. Edit the NGINX config.
+
+```bash
+sudo nano /etc/nginx/sites-available/default
+```
+
+4. Replace the default config with a clean reverse proxy block (makes later multi-app setup clearer).
+
+EC2 Host (Ubuntu)
+   ├── NGINX (listens on port 80 — public)
+   └── Minikube (running inside Docker)
+           └── NodePort Service → port 30001 → Pods
+   
+A small change can be made using the `sed` approach to replace the default location block. However, as more applications are added and additional reverse proxy rules are required, it becomes clearer and more manageable to simply clear the default NGINX configuration and define the required server blocks explicitly. For the first application, the configuration is reduced to only the reverse proxy rule:
+
+```bash
+server {
+    listen 80;
+    server_name _;
+    location / {
+        proxy_pass http://<minikube_ip>:30001;
+    }
+}
+```
+
+1. Test config to ensure syntax is valid & restart NGINX to apply the changes.
+
+```bash
+sudo nginx -t
+sudo systemctl restart nginx
+```
+
+### Security Group Changed for Application 1:
+
+Only port 80 needs to be allowed in the EC2 security group because users access the application through the EC2 public IP on port 80. The NodePort (30001) remains internal and is not exposed to the internet.
+
+---
