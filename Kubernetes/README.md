@@ -86,7 +86,22 @@
   - [Installing NGINX on the EC2 Host](#installing-nginx-on-the-ec2-host)
   - [First Application: NodePort Exposure on Port 30001](#first-application-nodeport-exposure-on-port-30001)
     - [Reverse Proxy for Application 1](#reverse-proxy-for-application-1)
-    - [Security Group Changed for Application 1:](#security-group-changed-for-application-1)
+    - [Security Group Changes for Application 1:](#security-group-changes-for-application-1)
+    - [Troubleshooting Notes](#troubleshooting-notes)
+  - [Second Application Deployment (LoadBalancer + Reverse Proxy)](#second-application-deployment-loadbalancer--reverse-proxy)
+    - [Why a LoadBalancer Service is Used](#why-a-loadbalancer-service-is-used)
+    - [What `minikube tunnel` Does](#what-minikube-tunnel-does)
+    - [Security Group Changes for Application 2:](#security-group-changes-for-application-2)
+    - [NGINX Reverse Proxy Configuration](#nginx-reverse-proxy-configuration)
+    - [NodePort vs LoadBalancer Summary](#nodeport-vs-loadbalancer-summary)
+    - [Verifying the LoadBalancer Assignment](#verifying-the-loadbalancer-assignment)
+  - [Third Application Deployment (hello-minikube) Within the Multi-Application Setup](#third-application-deployment-hello-minikube-within-the-multi-application-setup)
+    - [Purpose of Using the hello-minikube App](#purpose-of-using-the-hello-minikube-app)
+    - [Deployment and Exposure](#deployment-and-exposure)
+    - [Integrating Into the Existing NGINX Reverse Proxy](#integrating-into-the-existing-nginx-reverse-proxy)
+  - [Cleanup](#cleanup)
+  - [General Cleanup Procedure (All Applications)](#general-cleanup-procedure-all-applications)
+  - [Restoring Kubernetes After EC2 Reboot](#restoring-kubernetes-after-ec2-reboot)
 
 # Kubernetes Basics
 
@@ -1628,8 +1643,315 @@ sudo nginx -t
 sudo systemctl restart nginx
 ```
 
-### Security Group Changed for Application 1:
+### Security Group Changes for Application 1:
 
 Only port 80 needs to be allowed in the EC2 security group because users access the application through the EC2 public IP on port 80. The NodePort (30001) remains internal and is not exposed to the internet.
 
 ---
+
+### Troubleshooting Notes
+
+**502 Bad Gateway (NGINX)**  
+- Occurs when NGINX cannot connect to the application. Most commonly caused by an incorrect `proxy_pass` target. 
+- Ensure `proxy_pass` points to the Minikube node IP and NodePort.
+- Reload NGINX after adjusting the configuration.
+
+**Connection Refused on 127.0.0.1:30001**  
+- Occurs because the NodePort is opened **inside Minikube**, not on the EC2 host’s own network.  
+- `127.0.0.1` refers to the EC2 machine itself, so there is no application listening on that address and port.
+- The application must instead be accessed using the **Minikube IP**, which routes traffic into the cluster:
+  - `minikube ip`
+  - Access using `http://<MINIKUBE_IP>:30001`
+
+**NodePort Unreachable**  
+- Indicates the Minikube cluster or the backing Pods are not running or ready.  
+- A NodePort only forwards traffic if Pods behind the Service are in a Running state.  
+- Verify cluster and workload status before testing connectivity:
+  - `minikube status`
+  - `kubectl get pods`
+  - `kubectl get svc`
+- If Minikube is stopped, start it:
+  - `minikube start`
+
+---
+
+## Second Application Deployment (LoadBalancer + Reverse Proxy)
+
+This deployment introduces a second application running inside the same Minikube cluster.  Unlike the first application, which used a **NodePort**, this one is exposed using a **LoadBalancer Service**. The LoadBalancer Service provides a **single stable access point** for the application, even when multiple Pod replicas are running.
+ 
+Two replicas are run to allow traffic to be shared evenly, improving availability and preventing a single Pod from becoming a bottleneck.
+
+The LoadBalancer Service exposes port **9000**, and Kubernetes assigns a corresponding NodePort of **30002**.   The application should be reachable externally using the **EC2 public IP on port 9000**.
+
+### Why a LoadBalancer Service is Used
+
+A LoadBalancer Service sits in front of multiple Pod instances and decides how to distribute incoming traffic.  
+This ensures:
+- Requests are shared rather than sent to just one Pod.
+- The application stays available if one Pod restarts.
+- Scaling happens smoothly without changing how external users connect.
+ 
+
+A **LoadBalancer Service** in Kubernetes is *not* a load balancer by itself. It is a **request** for a load balancer.
+
+When a Service is defined with `type: LoadBalancer`, Kubernetes does two things:
+
+1. It exposes a stable **Service IP** inside the cluster.
+2. It signals to the infrastructure:  
+   "Provide an external load balancer that sends traffic to this Service."
+
+In a full cloud Kubernetes environment (for example, AWS EKS, Azure AKS, GKE), the cloud provider responds to this signal by automatically creating a real external load balancer.  
+
+That cloud load balancer becomes the entry point, forwarding traffic into the cluster and distributing requests across the Pods.
+
+So:
+
+- **The Service defines how traffic should be distributed.**
+- **The cloud provider (normally) creates the actual load balancer device.**
+
+In Minikube, there is **no cloud provider** to create this external load balancer. 
+
+So Kubernetes creates the Service but leaves the "external access point" empty, which is why the `EXTERNAL-IP` shows as `pending`.
+
+### What `minikube tunnel` Does
+
+`minikube tunnel` runs on the EC2 host and *simulates* the external load balancer that a cloud provider would normally supply.
+
+It works by:
+- Creating a network route into the cluster
+- Assigning a real, reachable IP to the LoadBalancer Service
+- Allowing traffic from the host (and therefore NGINX) to reach it
+
+So:
+
+| Component | Role |
+|----------|------|
+| **LoadBalancer Service** | Distributes traffic evenly across Pod replicas |
+| **Actual external load balancer** | Provides a public entry point (not present automatically in Minikube) |
+| **`minikube tunnel`** | Acts *in place of* the external load balancer in local / self-hosted setups |
+
+---
+
+### Security Group Changes for Application 2:
+
+User → EC2 Public IP (port 9000) → NGINX Reverse Proxy → Minikube Tunnel → LoadBalancer Service → Pod Replicas
+
+Because EC2 security groups block ports by default, **port 9000 must be opened** in the inbound rules.
+
+### NGINX Reverse Proxy Configuration
+
+The EC2 instance already runs NGINX from the first application.  
+
+The default server configuration is updated to include routes for both deployed applications.
+
+```bash
+server {
+    listen 80;
+    server_name _;
+
+    location / {
+        proxy_pass http://192.168.49.2:30001;
+    }
+}
+
+server {
+    listen 9000;
+    server_name _;
+
+    location / {
+        proxy_pass http://10.98.208.55:9000;
+    }
+}
+```
+
+- The first block routes port 80 traffic to the NodePort Service (first application).
+- The second block routes port 9000 traffic to the LoadBalancer Service (second application).
+- The two IPs are different because they point to **different targets inside the cluster**. One points to the **node** because it uses NodePort. The other points to the **LoadBalancer Service IP** because it uses a LoadBalancer.
+- After editing, reload NGINX to apply changes.
+
+### NodePort vs LoadBalancer Summary
+
+NodePort  
+- Opens a high port directly on the Minikube node.  
+- Suitable for development or internal testing.  
+- Accessed using: `http://<minikube-ip>:30002`
+
+LoadBalancer  
+- Provides one stable external access point.  
+- Distributes requests across multiple Pods automatically.  
+- Intended for production use cases.  
+- Accessed using: `http://<external-loadbalancer-ip>:9000`
+
+### Verifying the LoadBalancer Assignment
+
+After starting `minikube tunnel`, check the Service (in a new terminal):
+
+```bash
+kubectl get svc nodejs-svc-2
+```
+
+Expected output once tunnel is active:
+
+```bash
+NAME             TYPE           CLUSTER-IP     EXTERNAL-IP     PORT(S)           AGE
+nodejs-svc-2     LoadBalancer   10.x.x.x       10.x.x.x        9000:30002/TCP    ...
+
+Seeing an **EXTERNAL-IP** value (not “pending”) confirms that the LoadBalancer is active and reachable.
+```
+
+---
+
+## Third Application Deployment (hello-minikube) Within the Multi-Application Setup
+
+The third application continues the same deployment pattern as the first two, but introduces **path-based routing**.  
+
+Instead of exposing this application on a new port, it is served from **the same EC2 public IP** as the others, but accessed at a different URL path.
+
+This confirms how multiple applications can run inside one Minikube cluster and be made externally reachable using a single NGINX reverse proxy.
+
+### Purpose of Using the hello-minikube App
+
+hello-minikube is deliberately simple. Its only function is to return a basic HTTP response on port **8080**.  
+
+Because it does not require environment variables, databases, or scaling logic, it is ideal for demonstrating:
+- A Deployment creating and maintaining a Pod
+- A LoadBalancer Service exposing that Pod
+- How `minikube tunnel` allows a LoadBalancer Service to be reachable from outside the cluster
+- How NGINX can route requests to different applications based on URL path (The third app shows **path-based routing** instead of port-based routing).
+
+The goal is to show the **mechanics of Kubernetes networking**, not application behaviour.
+
+### Deployment and Exposure
+
+A Deployment is created to run the container:
+
+```bash
+kubectl create deployment hello-node --image=registry.k8s.io/e2e-test-images/agnhost:2.53 -- /agnhost netexec --http-port=8080
+```
+
+The Deployment ensures the Pod remains running.
+
+The Service makes the Pod reachable:
+
+```bash
+kubectl expose deployment hello-node --type=LoadBalancer --port=8080
+```
+
+Because this Service uses `type: LoadBalancer`, it receives an **external IP** when `minikube tunnel` is running. This external IP becomes the routing target used by NGINX.
+
+Check the Service:
+
+```bash
+kubectl get svc hello-node
+```
+
+Example:
+
+```bash
+NAME         TYPE           CLUSTER-IP      EXTERNAL-IP     PORT(S)          AGE
+hello-node   LoadBalancer   10.98.136.202   10.98.136.202   8080:30201/TCP   ...
+```
+
+This **EXTERNAL-IP** is what NGINX proxies to.
+
+### Integrating Into the Existing NGINX Reverse Proxy
+
+The first two applications used:
+- `/` for the first app
+- port 9000 for the second app
+
+The third application is added by routing the `/hello` path:
+
+```bash
+server {
+    listen 80;
+    server_name _;
+
+    location /hello/ {
+        proxy_pass http://10.98.136.202:8080/;
+    }
+
+    location / {
+        proxy_pass http://192.168.49.2:30001;
+    }
+}
+
+server {
+    listen 9000;
+    server_name _;
+
+    location / {
+        proxy_pass http://10.98.208.55:9000;
+    }
+}
+```
+
+This achieves path-based routing:
+
+```bash
+- `http://<EC2_PUBLIC_IP>/hello` → third application (LoadBalancer service)
+- `http://<EC2_PUBLIC_IP>/` → first application (NodePort service)
+- `http://<EC2_PUBLIC_IP>:9000` → second application (LoadBalancer service)
+```
+
+All three applications are accessed through **one cluster and one NGINX host**.
+
+## Cleanup
+
+## General Cleanup Procedure (All Applications)
+
+To fully remove the multi-application setup from the cluster, each Deployment and Service must be deleted.  
+A Deployment manages the Pod(s), and the Service exposes the Deployment to the network.  
+
+Deleting the Deployment stops the running Pods; deleting the Service removes the associated access route (NodePort or LoadBalancer).
+
+List active resources:
+
+```bash
+kubectl get deployments  
+kubectl get svc  
+kubectl get pods  
+```
+
+Delete each Deployment:
+
+```bash
+kubectl delete deployment <deployment-name>
+```
+
+Delete each Service:
+
+```bash
+kubectl delete svc <service-name>
+```
+
+kubectl get all
+
+This confirms that no Pods, Services, or ReplicaSets remain running from the applications.
+
+## Restoring Kubernetes After EC2 Reboot
+
+When the EC2 instance is restarted, the Minikube cluster and the LoadBalancer routing are not automatically restored.  
+
+This means applications exposed through LoadBalancer Services will no longer be reachable until the cluster and network tunnel are restarted.
+
+Steps to reactivate the environment:
+
+1. Restart the Kubernetes cluster:
+
+```bash
+minikube start
+```
+
+2. Recreate the LoadBalancer external routing:
+
+```bash
+sudo -E minikube tunnel
+
+#The `-E` flag tells sudo to **preserve the current user's environment variables**, which Minikube relies on (for example, PATH to the Minikube binary and Kubernetes config).
+```
+
+`minikube start` ensures all Deployments, Pods, and Services return to their previous state.  
+`minikube tunnel` reassigns external IPs for LoadBalancer Services, making them reachable again.
+
+If the tunnel is not running, any Service of type LoadBalancer will display `EXTERNAL-IP: pending` and external access will fail.
