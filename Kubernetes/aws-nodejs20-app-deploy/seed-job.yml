@@ -1,0 +1,16 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mongodb-seed
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: mongodb-seed
+        image: chrleybolton/sparta-test-app:latest
+        command: ["bash", "-c", "node seeds/seed.js"]
+        env:
+        - name: DB_HOST
+          value: "mongodb://mongodb-svc:27017/sparta"

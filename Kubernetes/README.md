@@ -102,6 +102,19 @@
   - [Cleanup](#cleanup)
   - [General Cleanup Procedure (All Applications)](#general-cleanup-procedure-all-applications)
   - [Restoring Kubernetes After EC2 Reboot](#restoring-kubernetes-after-ec2-reboot)
+- [Two-Tier Deployment with Persistent Storage, Scaling, Reverse Proxy, and Automatic Minikube Startup](#two-tier-deployment-with-persistent-storage-scaling-reverse-proxy-and-automatic-minikube-startup)
+  - [Architecture Summary](#architecture-summary)
+  - [Resource Requests and Limits](#resource-requests-and-limits)
+    - [MongoDB Resource Configuration](#mongodb-resource-configuration)
+    - [Application Resource Configuration](#application-resource-configuration)
+  - [Storage Capacity Issue – Error, Diagnosis, Root Cause, and Fix](#storage-capacity-issue--error-diagnosis-root-cause-and-fix)
+    - [Error Observed](#error-observed)
+    - [Debugging](#debugging)
+      - [First Attempt: Free Space](#first-attempt-free-space)
+      - [If No Space Is Recovered (Prune Returns Little/No Reclaimed Space)](#if-no-space-is-recovered-prune-returns-littleno-reclaimed-space)
+      - [Permanent Resolution (Increase Disk Size)](#permanent-resolution-increase-disk-size)
+  - [Automatic Minikube Startup on Reboot](#automatic-minikube-startup-on-reboot)
+  - [Validation and Load Testing](#validation-and-load-testing)
 
 # Kubernetes Basics
 
@@ -1386,7 +1399,8 @@ kubectl get svc nodejs-svc
 2. Generate Load Against the Application
    
 ```bash
-`ab -n 20000 -c 50 http://localhost:<nodePort>/`
+brew install apache2
+ab -n 20000 -c 50 http://localhost:<nodePort>/
 ```
 This uses Apache Bench to send 20,000 HTTP requests with a concurrency level of 50. The sustained load increases CPU usage on the Node.js Pods. If Horizontal Pod Autoscaling is enabled, this increased utilisation should trigger a scale-out event.
 
@@ -1446,7 +1460,9 @@ In Docker Desktop Kubernetes, NodePort and ClusterIP Services are reachable on `
 In Minikube, Services run inside a Minikube-managed VM or container runtime environment. The VM network is separate from the host, so NodePort addresses do not automatically map to `localhost`. As a result, the application is not reachable externally unless a forwarding mechanism is used.
 
 2. Generate Load Against the Application
-   
+
+```bash
+
 ```bash
 `ab -n 20000 -c 50 http://localhost:3000/`
 ```
@@ -1948,10 +1964,265 @@ minikube start
 ```bash
 sudo -E minikube tunnel
 
-#The `-E` flag tells sudo to **preserve the current user's environment variables**, which Minikube relies on (for example, PATH to the Minikube binary and Kubernetes config).
+# sudo -E is used so the tunnel runs with root privileges while keeping the user’s PATH and kubeconfig environment, ensuring Minikube can be found and can access the cluster correctly.
 ```
 
 `minikube start` ensures all Deployments, Pods, and Services return to their previous state.  
 `minikube tunnel` reassigns external IPs for LoadBalancer Services, making them reachable again.
 
 If the tunnel is not running, any Service of type LoadBalancer will display `EXTERNAL-IP: pending` and external access will fail.
+
+---
+
+# Two-Tier Deployment with Persistent Storage, Scaling, Reverse Proxy, and Automatic Minikube Startup
+
+This setup deploys a two-tier application consisting of a containerised Node.js application and a MongoDB database within a single Minikube cluster on an EC2 instance. 
+
+The database is provided persistent storage through a Kubernetes Persistent Volume Claim, and the application layer scales dynamically based on load using a Horizontal Pod Autoscaler (HPA). 
+
+The application is exposed externally by a NodePort Service, with an NGINX reverse proxy on the EC2 host routing public traffic to the service. Minikube is configured to automatically start after instance reboots.
+
+---
+
+## Architecture Summary
+
+EC2 Host  
+ ├── Docker Engine  
+ │     └── Minikube Cluster  
+ │            ├── MongoDB Deployment (with PersistentVolumeClaim reqquesting 100Mi of storage)  
+ │            ├── Node.js Deployment (Autoscaled using HPA with min 2 max 10 replicas)  
+ │            └── NodePort Service  
+ └── NGINX Reverse Proxy (public entrypoint on port 80)
+
+---
+
+## Resource Requests and Limits
+
+Resource constraints were applied to both MongoDB and the application to maintain stability on the t3a.small instance and ensure predictable scaling behavior. Without these limits, increased load and scaling would cause memory exhaustion and node instability.
+
+---
+
+### MongoDB Resource Configuration
+
+```yml
+resources:
+  requests:
+    memory: "64Mi"
+    cpu: "100m"
+  limits:
+    memory: "256Mi"
+    cpu: "200m"
+```
+
+Reasoning:  
+MongoDB naturally grows memory usage under sustained load. The limits prevent the database Pod from consuming excessive resources and triggering the kernel OOM killer, while the requests ensure MongoDB always receives enough resources to operate reliably. The kernel OOM killer is a Linux mechanism that forcefully terminates processes when the system runs out of memory, which in Kubernetes can cause Pods to be unexpectedly killed unless memory limits are set.
+
+---
+
+### Application Resource Configuration
+
+```yml
+requests:
+  cpu: "100m"
+  memory: "64Mi"
+limits:
+  cpu: "200m"
+  memory: "256Mi"
+```
+
+Reasoning:  
+When the HPA scales the application Pods, total memory usage multiplies. Without defined limits, scaling under load would cause the node to run out of memory and crash. The limits ensure each Pod remains within predictable resource bounds and can scale safely.
+
+These constraints remain required even after increasing disk capacity.
+
+---
+
+## Storage Capacity Issue – Error, Diagnosis, Root Cause, and Fix
+
+### Error Observed
+
+The application Pods repeatedly entered **ImagePullBackOff**, for example:
+
+```bash
+kubectl get pods
+```
+
+Ouput:
+
+```bash
+nodejs-deployment-5fd986d84f-hm8ww   0/1   ImagePullBackOff   0   77s  
+```
+
+`ImagePullBackOff` means Kubernetes tried to pull the container image for a Pod, failed, and is now repeatedly backing off and retrying the download instead of starting the container.
+
+Pulling the image manually confirmed the issue:
+
+```bash
+docker pull chrleybolton/sparta-test-app:latest  
+```
+> failed to register layer: write ... no space left on device
+
+This indicates the container image could not be unpacked because the filesystem was full.
+
+---
+
+### Debugging
+
+1. Check disk space usage:
+
+```bash
+df -h
+```
+
+If either `/` or `/var/lib/docker` is above ~90%, images cannot be written to disk. This is because Docker stores container layers and runtime data there, and without free space it cannot unpack or create new containers, leading to image pull failures.
+
+Example output:
+
+```bash
+Filesystem       Size  Used  Avail  Use%
+/dev/root        7.6G  7.3G  320M   96%
+```
+
+This confirms the node (the EC2 instance running Minikube) is out of usable storage.
+
+#### First Attempt: Free Space
+
+Try clearing unused Docker data first, as this often frees several gigabytes:
+
+```bash
+docker system prune -a --volumes -f
+```
+
+This removes:
+- old/unreferenced images  
+- unused containers  
+- build cache layers  
+- dangling volumes  
+
+Minikube can take up space because it stores Kubernetes component images, cached container layers, logs, and configuration inside Docker’s storage directory, which can grow over time. Remove the Minikube cluster and delete all associated data, including cached images, configuration, and local storage, freeing space completely:
+
+```bash
+minikube delete --all --purge
+```
+
+Recreate the cluster:
+
+```bash
+minikube start --driver=docker --cpus=2 --memory=1800 --addons=metrics-server --force
+```
+
+This command recreates a fresh Minikube cluster with controlled resource limits and enables the metrics server so the HPA can function. The values --cpus=2 and --memory=1800 are chosen to give the cluster enough resources to run the control plane and Pods without overwhelming the t3a.small instance, maintaining stability during scaling.
+
+If this frees space and the image pulls successfully, no further action is required.
+
+---
+
+#### If No Space Is Recovered (Prune Returns Little/No Reclaimed Space)
+
+If prune returns almost **0B reclaimed**, and the node remains >90% full, the storage issue is not removable cache, but more likely that the root volume itself is too small to hold:
+- Docker layer storage
+- Minikube cluster data
+- Application images
+
+This means the disk simply does not have enough capacity for the workload.
+
+The EC2 instance has an **8 GiB root volume**, and Docker plus Minikube use most of this space, leaving too little room for storing additional container image layers.
+
+This causes **ImagePullBackOff** because the image cannot be written to disk.
+
+Freeing Docker data may temporarily reduce usage, but the underlying limitation remains: **the root volume is too small** to support the workload.
+
+#### Permanent Resolution (Increase Disk Size)
+
+1. In AWS Console:
+   - EC2 → Select Instance → Storage → Click Volume ID
+   - Modify the volume size (e.g., 8 GiB → 20 GiB)
+
+2. Extend the partition: `growpart /dev/nvme0n1 1`
+   - This expands the underlying disk partition (a defined section of a disk that acts like its own storage unit) so the operating system can recognise the newly increased volume size.
+
+3. `Resize the filesystem: resize2fs /dev/nvme0n1p1`  
+   - This extends the actual filesystem to use the additional space in the expanded partition so the extra storage becomes available to the system.
+
+4. Confirm new space is available: `df -h`
+
+Example output:
+
+```bash
+Filesystem       Size  Used  Avail  Use%
+/dev/root         20G  6.6G   13G   35%
+```
+
+This provides enough room for:
+- Docker images and layers
+- Minikube control plane data
+- Application scaling during load testing
+
+---
+
+## Automatic Minikube Startup on Reboot
+
+Minikube does not start automatically when the EC2 instance reboots. A systemd service was added to start Minikube during boot.
+
+A **systemd service** is a configuration file that tells the Linux system to automatically start, stop, or manage a process, which in this case, starting Minikube when the instance boots.
+
+```bash
+sudo nano /etc/systemd/system/minikube.service
+```
+
+Input:
+
+```bash
+[Unit]
+Description=Start Minikube at boot
+# Human-readable name for the service
+
+After=network.target docker.service
+# Ensures networking and Docker are running before Minikube starts
+
+[Service]
+Type=oneshot
+# Runs the command once and then exits rather than staying active
+
+User=ubuntu
+# Specifies which user runs the command (must match Minikube installation user)
+
+ExecStart=/usr/local/bin/minikube start
+# The command executed at boot to start the Minikube cluster
+
+[Install]
+WantedBy=multi-user.target
+# Ensures the service starts automatically during the standard boot process
+```
+
+After creating the file run:
+
+```bash
+systemctl daemon-reload
+```
+enables the system to register the new unit.
+
+```bash
+systemctl enable minikube.service
+```
+Ensures Minikube starts automatically on reboot.
+
+*Note: The LoadBalancer tunnel (sudo -E minikube tunnel) cannot be automated. It requires:*
+- Root privileges
+- Environment variable inheritance
+- Manual routing injection into the host OS
+
+Therefore, it must be started manually after login.
+
+---
+
+## Validation and Load Testing
+
+Follow previous steps for load testing but with the updated apache command:
+
+```bash
+- ab -n 20000 -c 50 http://<minikube-ip>:<nodePort>/
+```
+
+Localhost is not used here because the NodePort is exposed on the Minikube node’s network rather than the EC2 host, so the application is only reachable via the Minikube IP.
+
